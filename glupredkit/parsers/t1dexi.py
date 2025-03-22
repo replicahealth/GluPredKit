@@ -45,22 +45,17 @@ class Parser(BaseParser):
 
             df_subject_meals = df_meals[df_meals['id'] == subject_id].copy()
             if not df_subject_meals.empty:
-                df_subject_meal_grams = df_subject_meals[df_subject_meals['meal_grams'].notna()][['meal_grams']].resample('5min', label='right').sum()
                 df_subject_meal_name = df_subject_meals[df_subject_meals['meal_label'].notna()][['meal_label']].resample('5min', label='right').agg(
                     lambda x: ', '.join(x))
-
                 df_subject_carbs = df_subject_meals[df_subject_meals['carbs'].notna()][['carbs']].resample('5min', label='right').sum()
 
-                df_subject = pd.merge(df_subject, df_subject_meal_grams, on="date", how='outer')
                 df_subject = pd.merge(df_subject, df_subject_meal_name, on="date", how='outer')
                 df_subject = pd.merge(df_subject, df_subject_carbs, on="date", how='outer')
 
                 # Fill NaN where numbers were turned to 0 or strings were turned to ''
-                df_subject['meal_grams'] = df_subject['meal_grams'].replace(0, np.nan)
                 df_subject['meal_label'] = df_subject['meal_label'].replace('', np.nan)
                 df_subject['carbs'] = df_subject['carbs'].replace(0, np.nan)
             else:
-                df_subject['meal_grams'] = np.nan
                 df_subject['meal_label'] = np.nan
                 df_subject['carbs'] = np.nan
 
@@ -68,6 +63,7 @@ class Parser(BaseParser):
             if not df_subject_bolus.empty:
                 df_subject_bolus = df_subject_bolus[['bolus']].resample('5min', label='right').sum()
                 df_subject = pd.merge(df_subject, df_subject_bolus, on="date", how='outer')
+                df_subject['bolus'] = df_subject['bolus'].replace(0, np.nan)
             else:
                 df_subject['bolus'] = np.nan
 
@@ -125,8 +121,6 @@ class Parser(BaseParser):
         Extract the data that we are interested in from the dataset, and process them into our format and into separate
         dataframes.
         """
-        heartrate_dict = get_heartrate_dict(file_path, self.subject_ids)
-        print("Heartrate dict processed")
         df_glucose = get_df_glucose(file_path, self.subject_ids)
         print("Glucose data processed")
         df_meals = get_df_meals(file_path, self.subject_ids)
@@ -139,6 +133,11 @@ class Parser(BaseParser):
         print("Basal data processed")
         df_exercise = get_df_exercise(file_path, self.subject_ids)
         print("Exercise data processed")
+        heartrate_dict = get_heartrate_dict(file_path, self.subject_ids)
+        print("Heartrate dict processed")
+        steps_or_cal_burn_dict = get_steps_or_cal_burn_dict(file_path, self.subject_ids)
+        print("Steps or calories burned dict processed")
+
         return df_glucose, df_meals, df_bolus, df_basal, df_exercise, heartrate_dict
 
 
@@ -164,11 +163,8 @@ def get_heartrate_dict(file_path, subject_ids):
                 df_heartrate = chunk.applymap(lambda x: x.decode() if isinstance(x, bytes) else x)
 
                 # For some reason, the heart rate mean gives more data in T1DEXI version, while not in T1DEXIP
-                # TODO: Need to validate the handling of heartrate data
-                if 'T1DEXIP' in file_path:
-                    df_heartrate = df_heartrate[df_heartrate['VSTEST'] == 'Heart Rate']
-                else:
-                    df_heartrate = df_heartrate[df_heartrate['VSTEST'] == 'Heart Rate, Mean']
+                # The heart rate from both devices in the study
+                df_heartrate = df_heartrate[(df_heartrate['VSTEST'] == 'Heart Rate') | (df_heartrate['VSTEST'] == 'Heart Rate, Mean')]
 
                 # Filter the DataFrame for subject_ids before looping over unique values
                 df_heartrate = df_heartrate[df_heartrate['USUBJID'].isin(subject_ids)]
@@ -191,6 +187,49 @@ def get_heartrate_dict(file_path, subject_ids):
             return heartrate_dict
 
 
+def get_steps_or_cal_burn_dict(file_path, subject_ids):
+    # Steps data is processed by chunks because the steps file is so big and creates memory problems
+    row_count = 0
+    chunksize = 1000000
+    file_name = '/FA.xpt'
+    results_dict = {}
+
+    with zipfile_deflate64.ZipFile(file_path, 'r') as zip_file:
+        matched_files = [f for f in zip_file.namelist() if f.endswith(file_name)]
+        matched_file = matched_files[0]
+        with zip_file.open(matched_file) as xpt_file:
+            for chunk in pd.read_sas(xpt_file, format='xport', chunksize=chunksize):
+                row_count += chunksize
+                df_fa = chunk.applymap(lambda x: x.decode() if isinstance(x, bytes) else x)
+                # Filter the DataFrame for subject_ids before looping over unique values
+                df_fa = df_fa[df_fa['USUBJID'].isin(subject_ids)]
+                df_fa.loc[:, 'FADTC'] = create_sas_date_for_column(filtered_rows['FADTC'])
+
+                for subject_id in df_fa['USUBJID'].unique():
+                    filtered_rows = df_fa[df_fa['USUBJID'] == subject_id]
+
+                    if 'T1DEXIP' in file_path:
+                        filtered_rows = filtered_rows[filtered_rows['FATESTCD'] == 'CALBURN']
+                        filtered_rows.loc[:, 'FASTRESN'] = pd.to_numeric(filtered_rows['FASTRESN'])
+                        filtered_rows.rename(columns={'FASTRESN': 'calories_burned', 'FADTC': 'date'}, inplace=True)
+                        filtered_rows = filtered_rows[['calories_burned', 'date']]
+                    else:
+                        filtered_rows = filtered_rows[filtered_rows['FAOBJ'] == '10-SECOND INTERVAL STEP COUNT']
+                        filtered_rows.loc[:, 'FASTRESN'] = pd.to_numeric(filtered_rows['FASTRESN'])
+                        filtered_rows.rename(columns={'FASTRESN': 'steps', 'FADTC': 'date'}, inplace=True)
+                        filtered_rows = filtered_rows[['steps', 'date']]
+
+                    filtered_rows.set_index('date', inplace=True)
+                    filtered_rows = filtered_rows.resample('5min', label='right').sum()
+
+                    # If the USUBJID is already in the dictionary, append the new data
+                    if subject_id in results_dict:
+                        results_dict[subject_id] = pd.concat([results_dict[subject_id], filtered_rows])
+                    else:
+                        # Otherwise, create a new DataFrame for this USUBJID
+                        results_dict[subject_id] = filtered_rows
+            return results_dict
+
 def get_df_glucose(file_path, subject_ids):
     df_glucose = get_df_from_zip_deflate_64(file_path, 'LB.xpt', subject_ids=subject_ids)
     df_glucose.loc[:, 'LBDTC'] = create_sas_date_for_column(df_glucose['LBDTC'])
@@ -203,20 +242,13 @@ def get_df_glucose(file_path, subject_ids):
 
 
 def get_df_meals(file_path, subject_ids):
-    df_meals = get_df_from_zip_deflate_64(file_path, 'ML.xpt', subject_ids=subject_ids)
-    df_fa_meals = get_df_from_zip_deflate_64(file_path, 'FAMLPI.xpt', subject_ids=subject_ids)
-    df_meals.loc[:, 'MLDTC'] = create_sas_date_for_column(df_meals['MLDTC'])
-    df_meals.loc[:, 'MLDOSE'] = pd.to_numeric(df_meals['MLDOSE'], errors='coerce')
-    df_meals.rename(
-        columns={'MLDOSE': 'meal_grams', 'MLTRT': 'meal_label', 'MLCAT': 'meal_category', 'MLDTC': 'date',
-                 'USUBJID': 'id'}, inplace=True)
-    df_meals = df_meals[['meal_grams', 'meal_label', 'id', 'date']]
-    df_fa_meals = df_fa_meals[df_fa_meals['FATESTCD'] == "DCARBT"][df_fa_meals['FACAT'] == "CONSUMED"]
-    df_fa_meals.loc[:, 'FADTC'] = create_sas_date_for_column(df_fa_meals['FADTC'])
-    df_fa_meals.loc[:, 'FASTRESN'] = pd.to_numeric(df_fa_meals['FASTRESN'], errors='coerce')
-    df_fa_meals.rename(columns={'FASTRESN': 'carbs', 'FADTC': 'date', 'USUBJID': 'id'}, inplace=True)
-    df_fa_meals = df_fa_meals[['carbs', 'id', 'date']]
-    df_meals = pd.concat([df_meals, df_fa_meals])
+    df_meals = get_df_from_zip_deflate_64(file_path, 'FAMLPM.xpt', subject_ids=subject_ids)
+    df_meals = df_meals[df_meals['FACAT'] == 'CONSUMED']  # Consumed is taken - returned
+    df_meals = df_meals[df_meals['FATESTCD'] == 'DCARBT']  # Extracting dietary carbohydrates
+    df_meals.loc[:, 'FADTC'] = create_sas_date_for_column(df_meals['FADTC'])
+    df_meals.loc[:, 'FAORRES'] = pd.to_numeric(df_meals['FAORRES'], errors='coerce')
+    df_meals.rename(columns={'FAORRES': 'carbs', 'PTMLDESC': 'meal_label', 'FADTC': 'date', 'USUBJID': 'id'}, inplace=True)
+    df_meals = df_meals[['carbs', 'meal_label', 'id', 'date']]
     df_meals.set_index('date', inplace=True)
     return df_meals
 
@@ -228,6 +260,7 @@ def get_df_insulin(file_path, subject_ids):
     df_insulin.rename(columns={'FASTRESN': 'dose', 'FAORRESU': 'unit', 'FADTC': 'date', 'USUBJID': 'id', 'INSNMBOL':
         'delivered bolus', 'INSEXBOL': 'extended bolus', 'FADUR': 'duration', 'FATEST': 'type'}, inplace=True)
     df_insulin['duration'] = df_insulin['duration'].apply(lambda x: parse_duration(x))
+    df_insulin = df_insulin.drop_duplicates()
     return df_insulin[['id', 'unit', 'dose', 'date', 'duration', 'delivered bolus', 'extended bolus', 'INSSTYPE',
                        'type']]
 
@@ -261,12 +294,21 @@ def get_df_basal(df_insulin):
     df_basal = df_insulin[df_insulin['type'] != 'BOLUS INSULIN'][['INSSTYPE', 'dose', 'unit', 'date', 'id', 'duration']]
     df_basal = df_basal[df_basal['unit'] == 'U']
     df_basal['duration'].fillna(pd.Timedelta(minutes=0), inplace=True)
+    df_basal = df_basal.drop_duplicates(subset=['id', 'date'])  # Drop sample when start dates are the same
 
+    # manipulate duration to match with the next sample if the id is the same
+    df_basal['next_date'] = df_basal['date'].shift(-1)  # Get next row's date
+    df_basal['next_id'] = df_basal['id'].shift(-1)  # Get next row's id
+    df_basal['duration'] = df_basal.apply(
+        lambda row: (row['next_date'] - row['date']) if row['id'] == row['next_id'] else row['duration'],
+        axis=1
+    )
+    # Split basal insulin into time interval bins so that it is distributed in the resampling
     new_rows = []
     for _, row in df_basal.iterrows():
         new_rows.extend(split_duration(row, 'dose'))
     df_basal = pd.DataFrame(new_rows)
-    df_basal.drop(columns=['duration'], inplace=True)
+    df_basal.drop(columns=['duration', 'next_date', 'next_id'], inplace=True)
     df_basal['dose'] = df_basal['dose'] * 12  # Convert to U/hr
     df_basal.set_index('date', inplace=True)
     df_basal.rename(columns={'dose': 'basal'}, inplace=True)
