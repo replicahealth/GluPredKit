@@ -54,7 +54,7 @@ class Parser(BaseParser):
 
                 # Fill NaN where numbers were turned to 0 or strings were turned to ''
                 df_subject['meal_label'] = df_subject['meal_label'].replace('', np.nan)
-                df_subject['carbs'] = df_subject['carbs'].replace(0, np.nan)
+                df_subject['carbs'] = df_subject['carbs'].replace(0, np.nan).infer_objects(copy=False)
             else:
                 df_subject['meal_label'] = np.nan
                 df_subject['carbs'] = np.nan
@@ -122,7 +122,7 @@ class Parser(BaseParser):
             df_subject.sort_index(inplace=True)
 
             # Ensuring homogenous time intervals
-            df_subject = df_subject.resample('5T').asfreq()
+            df_subject = df_subject.resample('5min').asfreq()
 
             processed_dfs.append(df_subject)
             print(f"{count}/{len(self.subject_ids)} are prepared")
@@ -137,21 +137,21 @@ class Parser(BaseParser):
         dataframes.
         """
         df_glucose = get_df_glucose(file_path, self.subject_ids)
-        print("Glucose data processed")
+        print("Glucose data processed", df_glucose)
         df_meals = get_df_meals(file_path, self.subject_ids)
-        print("Meal data processed")
+        print("Meal data processed", df_meals)
         df_insulin = get_df_insulin(file_path, self.subject_ids)
-        print("Insulin data processed")
+        print("Insulin data processed", df_insulin)
         df_bolus = get_df_bolus(df_insulin)
-        print("Bolus data processed")
+        print("Bolus data processed", df_bolus)
         df_basal = get_df_basal(df_insulin)
-        print("Basal data processed")
+        print("Basal data processed", df_basal)
         df_exercise = get_df_exercise(file_path, self.subject_ids)
-        print("Exercise data processed")
+        print("Exercise data processed", df_exercise)
         heartrate_dict = get_heartrate_dict(file_path, self.subject_ids)
-        print("Heartrate dict processed")
+        print("Heartrate dict processed", heartrate_dict)
         steps_or_cal_burn_dict = get_steps_or_cal_burn_dict(file_path, self.subject_ids)
-        print("Steps or calories burned dict processed")
+        print("Steps or calories burned dict processed", steps_or_cal_burn_dict)
 
         return df_glucose, df_meals, df_bolus, df_basal, df_exercise, heartrate_dict, steps_or_cal_burn_dict
 
@@ -290,7 +290,7 @@ def get_df_bolus(df_insulin):
     df_bolus.loc[df_bolus['INSSTYPE'] == 'square', 'dose'] = 0.0
 
     # Get extended boluses as a dataframe with doses spread across 5-minute intervals
-    df_bolus['extended bolus'].replace(0.0, np.nan, inplace=True)
+    df_bolus['extended bolus'] = df_bolus['extended bolus'].replace(0.0, np.nan)
     extended_boluses = df_bolus[df_bolus['extended bolus'].notna()].copy()
     new_rows = []
     for _, row in extended_boluses.iterrows():
@@ -309,7 +309,7 @@ def get_df_bolus(df_insulin):
 def get_df_basal(df_insulin):
     df_basal = df_insulin[df_insulin['type'] != 'BOLUS INSULIN'][['INSSTYPE', 'dose', 'unit', 'date', 'id', 'duration']]
     df_basal = df_basal[df_basal['unit'] == 'U']
-    df_basal['duration'].fillna(pd.Timedelta(minutes=0), inplace=True)
+    df_basal['duration'] = df_basal['duration'].fillna(pd.Timedelta(minutes=0))
     df_basal = df_basal.drop_duplicates(subset=['id', 'date'])  # Drop sample when start dates are the same
 
     # manipulate duration to match with the next sample if the id is the same
