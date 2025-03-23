@@ -39,8 +39,9 @@ class Parser(BaseParser):
         count = 1
         for subject_id in self.subject_ids:
             df_subject = df_glucose[df_glucose['id'] == subject_id].copy()
-            df_subject = df_subject.resample('5min', label='right').mean() # TODO: TRY TO RUN THIS DIRECTLY IN THE GET CGM DF!
-            df_subject['id'] = subject_id
+            df_subject['id'] = df_subject['id'].astype('int')
+            df_subject = df_subject.resample('5min', label='right').mean()
+            df_subject['id'] = df_subject['id'].astype('object')
             df_subject.sort_index(inplace=True)
 
             df_subject_meals = df_meals[df_meals['id'] == subject_id].copy()
@@ -249,7 +250,6 @@ def get_df_glucose(file_path, subject_ids):
     df_glucose = get_df_from_zip_deflate_64(file_path, 'LB.xpt', subject_ids=subject_ids)
     df_glucose['date'] = create_sas_date_for_column(df_glucose['LBDTC'])
     df_glucose.loc[:, 'LBSTRESN'] = pd.to_numeric(df_glucose['LBSTRESN'], errors='coerce')
-    df_glucose['USUBJID'] = df_glucose['USUBJID'].astype('int')
     df_glucose.rename(columns={'LBSTRESN': 'CGM', 'USUBJID': 'id'}, inplace=True)
     df_glucose = df_glucose[df_glucose['LBTESTCD'] == 'GLUC']  # Filtering out glucose (from hba1c)
     df_glucose = df_glucose[['id', 'CGM', 'date']]
