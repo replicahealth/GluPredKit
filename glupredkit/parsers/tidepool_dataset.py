@@ -19,6 +19,7 @@ class Parser(BaseParser):
         """
         # TODO: Save PA, SAP, and HCL separately?
         # TODO: Insulin types?
+        # TODO: add gender, age, ...
         file_paths = {
             #'HCL150': ['Tidepool-JDRF-HCL150-train', 'Tidepool-JDRF-HCL150-test'],
             #'SAP100': ['Tidepool-JDRF-SAP100-train', 'Tidepool-JDRF-SAP100-test'],
@@ -66,7 +67,6 @@ class Parser(BaseParser):
         else:
             print("Subject with no carbohydrates")
 
-        # TODO: Extended boluses?
         if not df_bolus.empty:
             df_bolus = df_bolus.resample('5min', label='right').sum()
             df = pd.merge(df, df_bolus, on="date", how='outer')
@@ -80,10 +80,11 @@ class Parser(BaseParser):
             print("Subject with no basals")
 
         if not df_workouts.empty:
-            df_workout_labels = df_workouts['workout_label'].resample('5min', label='right').last()
-            df_workout_labels = df_workouts['workout_duration'].resample('5min', label='right').sum()
+            df_workout_label = df_workouts['workout_label'].resample('5min', label='right').last()
+            df_workout_duration = df_workouts['workout_duration'].resample('5min', label='right').sum()
             df_calories_burned = df_workouts['calories_burned'].resample('5min', label='right').sum()
-            df = pd.merge(df, df_workout_labels, on="date", how='outer')
+            df = pd.merge(df, df_workout_label, on="date", how='outer')
+            df = pd.merge(df, df_workout_duration, on="date", how='outer')
             df = pd.merge(df, df_calories_burned, on="date", how='outer')
 
         df['insulin'] = df['bolus'] + df['basal'] / 12
@@ -105,6 +106,7 @@ class Parser(BaseParser):
         # We find the subject time zone offset by finding the offset most often present, if any. If not, use UTC time
         # Future work should look at whether the local times are safe to use, validate that offsets are consistent across datatypes
         # If yes, we could just use local time when available, and default back to UTC when unavailable
+        # The most strict (but maybe necessary) alternative would be to skip all samples without local time (around 1/3)
         grouped = df.groupby('est.timezoneOffset').size().reset_index(name='count')
         if grouped.empty:
             ts_offset = 0.0
@@ -134,8 +136,17 @@ class Parser(BaseParser):
         # Dataframe bolus doses
         df_bolus = df[df['type'] == 'bolus'][['date', 'normal']]
         df_bolus.rename(columns={"normal": "bolus"}, inplace=True)
-        df_bolus.sort_values(by='date', inplace=True, ascending=True)
         df_bolus.set_index('date', inplace=True)
+
+        if 'extended' in df.columns:
+            expanded_rows = []
+            for _, row in df[df['extended'].notna()].iterrows():
+                intervals = split_extended_bolus_into_intervals(row)
+                expanded_rows.extend(intervals)
+            df_extended_boluses = pd.DataFrame(expanded_rows)
+            df_extended_boluses.set_index('date', inplace=True)
+            df_bolus = pd.concat([df_bolus, df_extended_boluses])
+        df_bolus.sort_values(by='date', inplace=True, ascending=True)
 
         # Dataframe basal rates
         df_basal = df[df['type'] == 'basal'][['date', 'duration', 'rate', 'units', 'deliveryType']].copy()
@@ -159,6 +170,7 @@ class Parser(BaseParser):
         for _, row in df_basal.iterrows():
             intervals = split_basal_into_intervals(row)
             expanded_rows.extend(intervals)
+
         df_basal = pd.DataFrame(expanded_rows)
         df_basal.set_index('date', inplace=True)
 
@@ -203,8 +215,9 @@ class Parser(BaseParser):
 
 def split_basal_into_intervals(row):
     start = row.date
-    end = start + timedelta(seconds=row['duration'])
-    total_insulin_delivered = row['basal'] * row['duration'] / 60
+    duration_minutes = row['duration'] / 60
+    end = start + timedelta(minutes=duration_minutes)
+    total_insulin_delivered = row['basal'] / 60 * duration_minutes  # U /hr / 60 -> U/min, *min --> U
     interval = timedelta(minutes=5)
 
     # Track rows for the new DataFrame
@@ -214,13 +227,39 @@ def split_basal_into_intervals(row):
     while current < end:
         next_interval = min(current + interval, end)
         # Calculate the proportion of time in the 5-minute bin
-        proportion = (next_interval - current) / timedelta(minutes=row['duration'])
+        proportion = (next_interval - current) / timedelta(minutes=duration_minutes)
         bin_value = total_insulin_delivered * proportion
 
         # Add the row to the list
         rows.append({
             'date': current,
-            'basal': bin_value * 12  # Convert back to U/hr when we are done
+            'basal': bin_value * 12  # From U to U/hr
+        })
+        current = next_interval
+
+    return rows
+
+
+def split_extended_bolus_into_intervals(row):
+    start = row.date
+    duration = row['duration'] / 1000
+    end = start + timedelta(seconds=duration)
+    interval = timedelta(minutes=5)
+
+    # Track rows for the new DataFrame
+    rows = []
+    current = start
+
+    while current < end:
+        next_interval = min(current + interval, end)
+        # Calculate the proportion of time in the 5-minute bin
+        proportion = (next_interval - current) / timedelta(seconds=duration)
+        bin_value = row['extended'] * proportion
+
+        # Add the row to the list
+        rows.append({
+            'date': current,
+            'bolus': bin_value
         })
         current = next_interval
 
