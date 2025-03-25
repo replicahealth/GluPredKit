@@ -17,14 +17,17 @@ class Parser(BaseParser):
         """
         file_path -- the file path to the tidepool dataset root folder.
         """
+        # TODO: Save PA, SAP, and HCL separately?
+        # TODO: Insulin types?
         file_paths = {
-            'HCL150': ['Tidepool-JDRF-HCL150-train', 'Tidepool-JDRF-HCL150-test'],
-            'SAP100': ['Tidepool-JDRF-SAP100-train', 'Tidepool-JDRF-SAP100-test'],
+            #'HCL150': ['Tidepool-JDRF-HCL150-train', 'Tidepool-JDRF-HCL150-test'],
+            #'SAP100': ['Tidepool-JDRF-SAP100-train', 'Tidepool-JDRF-SAP100-test'],
             'PA50': ['Tidepool-JDRF-PA50-train', 'Tidepool-JDRF-PA50-test']
         }
         all_dfs, all_ids, is_test_bools = [], [], []
         for prefix, folders in file_paths.items():
             for folder in folders:
+                # TODO: Each subject should be taken train/test cronologically so that we can "safe merge" them!
                 current_file_path = os.path.join(file_path, folder, 'train-data' if 'train' in folder else 'test-data')
                 is_test = True if 'test' in folder else False
                 all_dfs, all_ids, is_test_bools = get_dfs_and_ids(current_file_path, all_dfs, all_ids, is_test_bools, is_test, id_prefix=f'{prefix}-')
@@ -36,6 +39,9 @@ class Parser(BaseParser):
             df_resampled['id'] = all_ids[index]
             df_resampled['is_test'] = is_test_bools[index]
             processed_dfs.append(df_resampled)
+
+        # TODO: add some validation here, for 5-min intervals, sorting, merging of test-train like in ohio
+        # TODO: sort by subject, and date
 
         df_final = pd.concat(processed_dfs)
         return df_final
@@ -52,29 +58,31 @@ class Parser(BaseParser):
                     df.sort_index(inplace=True)
 
         df = df_glucose.copy()
-        df = df['CGM'].resample('5T', label='right').mean()
+        df = df['CGM'].resample('5min', label='right').mean()
 
         if not df_carbs.empty:
-            df_carbs = df_carbs.resample('5T', label='right').sum()
+            df_carbs = df_carbs.resample('5min', label='right').sum()
             df = pd.merge(df, df_carbs, on="date", how='outer')
         else:
             print("Subject with no carbohydrates")
 
+        # TODO: Extended boluses?
         if not df_bolus.empty:
-            df_bolus = df_bolus.resample('5T', label='right').sum()
+            df_bolus = df_bolus.resample('5min', label='right').sum()
             df = pd.merge(df, df_bolus, on="date", how='outer')
         else:
             print("Subject with no boluses")
 
         if not df_basal.empty:
-            df_basal = df_basal.resample('5T', label='right').sum()
+            df_basal = df_basal.resample('5min', label='right').sum()
             df = pd.merge(df, df_basal, on="date", how='outer')
         else:
             print("Subject with no basals")
 
         if not df_workouts.empty:
-            df_workout_labels = df_workouts['workout_label'].resample('5T', label='right').last()
-            df_calories_burned = df_workouts['calories_burned'].resample('5T', label='right').sum()
+            df_workout_labels = df_workouts['workout_label'].resample('5min', label='right').last()
+            df_workout_labels = df_workouts['workout_duration'].resample('5min', label='right').sum()
+            df_calories_burned = df_workouts['calories_burned'].resample('5min', label='right').sum()
             df = pd.merge(df, df_workout_labels, on="date", how='outer')
             df = pd.merge(df, df_calories_burned, on="date", how='outer')
 
@@ -82,7 +90,7 @@ class Parser(BaseParser):
 
         # Ensuring homogenous time intervals
         df.sort_index(inplace=True)
-        df = df.resample('5T').asfreq()
+        df = df.resample('5min').asfreq()
 
         time_diffs = df.index.to_series().diff()
         expected_interval = pd.Timedelta(minutes=5)
@@ -94,46 +102,64 @@ class Parser(BaseParser):
         return df
 
     def get_dataframes(self, df):
-        df['time'] = pd.to_datetime(df['time'])
+        # We use the local time as time consistently, and ignore that people might travel even though there will be some
+        # data that is wrong because of this. But there is not enough consistent time zone data available
+        print("COUNTS", df[['est.localTime', 'time']].value_counts())
 
-        # TODO: For time zone local, there are for a subset a column "est.localTime" that we could use
+        df['est.localTime'] = pd.to_datetime(df['est.localTime'])
+        print("COUNTS AFTER", df[['est.localTime', 'time']].value_counts())
 
         # Dataframe blood glucose
         # cbg = continuous blood glucose, smbg = self-monitoring of blood glucose
         #df_glucose = df[df['type'] == 'cbg'][['time', 'units', 'value']]
-        df_glucose = df[df['type'].isin(['cbg', 'smbg'])][['time', 'units', 'value']]
+        df_glucose = df[df['type'].isin(['cbg', 'smbg'])][['est.localTime', 'units', 'value']]
         df_glucose['value'] = df_glucose.apply(
             lambda row: row['value'] * 18.0182 if row['units'] == 'mmol/L' else row['value'], axis=1)
-        df_glucose.rename(columns={"time": "date", "value": "CGM"}, inplace=True)
+        df_glucose.rename(columns={"est.localTime": "date", "value": "CGM"}, inplace=True)
         df_glucose.drop(columns=['units'], inplace=True)
         df_glucose.sort_values(by='date', inplace=True, ascending=True)
         df_glucose.set_index('date', inplace=True)
 
         # Dataframe bolus doses
-        df_bolus = df[df['type'] == 'bolus'][['time', 'normal']]
-        df_bolus.rename(columns={"time": "date", "normal": "bolus"}, inplace=True)
+        df_bolus = df[df['type'] == 'bolus'][['est.localTime', 'normal']]
+        df_bolus.rename(columns={"est.localTime": "date", "normal": "bolus"}, inplace=True)
         df_bolus.sort_values(by='date', inplace=True, ascending=True)
         df_bolus.set_index('date', inplace=True)
 
         # Dataframe basal rates
-        # TODO: Verify that basals are correctly added according to schedule / percentage / temp basals...
-        df_basal = df[df['type'] == 'basal'][['time', 'duration', 'rate', 'units']]
-        df_basal.rename(columns={"time": "date", "rate": "basal"}, inplace=True)
+        df_basal = df[df['type'] == 'basal'][['est.localTime', 'duration', 'rate', 'units', 'deliveryType']].copy()
+        print(df_basal)
+
         df_basal['duration'] = df_basal['duration'] / 1000  # convert to seconds
+        df_basal['duration'] = df_basal['duration'].fillna(0)
+        df_basal.rename(columns={"est.localTime": "date", "rate": "basal"}, inplace=True)
         df_basal.sort_values(by='date', inplace=True, ascending=True)
+        df_basal.loc[df_basal['deliveryType'] == 'suspend', 'basal'] = 0.0  # Set suspend values to 0.0
+        # Remove duplicate start dates, we choose the first as we cannot know exactly what to do
+        df_basal = df_basal.drop_duplicates(subset=['date'])
+        # Manipulate duration to match with the next sample if the id is the same, if overlapping
+        df_basal['end_date'] = df_basal['date'] + pd.to_timedelta(df_basal['duration'], unit='s')  # Get end date
+        df_basal['next_date'] = df_basal['date'].shift(-1)  # Get next row's date
+        df_basal['duration'] = df_basal.apply(
+            lambda row: (row['next_date'] - row['date']).total_seconds() if pd.notna(row['next_date']) and row['end_date'] >= row['next_date']
+            else row['duration'],
+            axis=1
+        )
         # We need to split each sample into five minute intervals, and create new rows for each five minutes
         expanded_rows = []
         for _, row in df_basal.iterrows():
             intervals = split_basal_into_intervals(row)
             expanded_rows.extend(intervals)
         df_basal = pd.DataFrame(expanded_rows)
+        print(df_basal)
         df_basal.set_index('date', inplace=True)
 
         # Dataframe carbohydrates
         df_carbs = pd.DataFrame()
+        # TODO: could also be both
         if 'nutrition.carbohydrate.net' in df.columns:
-            df_carbs = df[df['type'] == 'food'][['time', 'nutrition.carbohydrate.net']]
-            df_carbs.rename(columns={"time": "date", "nutrition.carbohydrate.net": "carbs"}, inplace=True)
+            df_carbs = df[df['type'] == 'food'][['est.localTime', 'nutrition.carbohydrate.net']]
+            df_carbs.rename(columns={"est.localTime": "date", "nutrition.carbohydrate.net": "carbs"}, inplace=True)
         elif 'carbInput' in df.columns:
             df_carbs = df[['time', 'carbInput', 'type']][df['carbInput'].notna()]
             df_carbs.rename(columns={"time": "date", "carbInput": "carbs"}, inplace=True)
@@ -150,15 +176,16 @@ class Parser(BaseParser):
             df_workouts = df.copy()[df['activityName'].notna()]
             if not df_workouts.empty:
                 if 'activityDuration.value' in df_workouts.columns:
-                    df_workouts.rename(columns={"time": "date", "activityName": "workout_label"}, inplace=True)
+                    df_workouts.rename(columns={"est.localTime": "date", "activityName": "workout_label",
+                                                "activityDuration.value": "workout_duration"}, inplace=True)
                     df_workouts.sort_values(by='date', inplace=True, ascending=True)
-                    # We need to split each sample into five minute intervals, and create new rows for each five minutes
-                    expanded_rows = []
-                    for _, row in df_workouts.iterrows():
-                        intervals = split_workouts_into_intervals(row)
-                        expanded_rows.extend(intervals)
-                    df_workouts = pd.DataFrame(expanded_rows)
+
+                    if 'energy.value' in df_workouts.columns:
+                        df_workouts.rename(columns={"energy.value": "calories_burned"}, inplace=True)
+                    else:
+                        df_workouts['calories_burned'] = np.nan
                     df_workouts.set_index('date', inplace=True)
+                    df_workouts = df_workouts[['workout_label', 'calories_burned', 'workout_duration']]
                 else:
                     print("No duration registered for physical activity!")
 
@@ -188,40 +215,6 @@ def split_basal_into_intervals(row):
         })
         current = next_interval
 
-    return rows
-
-
-def split_workouts_into_intervals(row):
-    start = row.date
-    if not pd.isna(row['activityDuration.value']):
-        end = start + timedelta(seconds=row['activityDuration.value'])
-    else:
-        end = start + timedelta(seconds=10)
-    bin_value = row['workout_label']
-    if 'energy.value' in row:
-        total_calories_burned = row['energy.value']
-    else:
-        total_calories_burned = np.nan
-    interval = timedelta(minutes=5)
-    total_duration = (end - start).total_seconds()
-
-    # Track rows for the new DataFrame
-    rows = []
-    current = start
-
-    while current < end:
-        next_interval = min(current + interval, end)
-
-        proportion = (next_interval - current).total_seconds() / total_duration
-        calories_burned = total_calories_burned * proportion
-
-        # Add the row to the list
-        rows.append({
-            'date': current,
-            'workout_label': bin_value,
-            'calories_burned': calories_burned
-        })
-        current = next_interval
     return rows
 
 

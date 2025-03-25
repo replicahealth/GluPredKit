@@ -16,8 +16,8 @@ class Plot(BasePlot):
         This plot plots predicted trajectories from the measured values. A random subsample of around 24 hours will
         be plotted.
         """
-        n_samples = 12 * 12
-        start_index = 0
+        n_samples = 12 * 4
+        start_index = 12 * 9
 
         plots = []
         names = []
@@ -37,7 +37,7 @@ class Plot(BasePlot):
                 hypo = 3.9
                 hyper = 10.0
 
-            plt.figure(figsize=(16, 6))
+            plt.figure(figsize=(16, 5))
 
             t = [i * 5 / 60 for i in range(len(y_true))]
             plt.scatter(t, y_true, color='black', label='Glucose Measurements')
@@ -95,8 +95,8 @@ class Plot(BasePlot):
             # Indicate hypo- and hyperglycemic range
             ax_left.axhline(y=hypo, color='black', linestyle='--', linewidth=1)
             ax_left.axhline(y=hyper, color='black', linestyle='--', linewidth=1)
-            ax_left.text(x=-0.4, y=hypo + 0.2, s="Hypoglycemic threshold", color="black", ha="left", fontsize=13)
-            ax_left.text(x=-0.4, y=hyper + 0.2, s="Hyperglycemic threshold", color="black", ha="left", fontsize=13)
+            ax_left.text(x=-0.15, y=hypo + 0.2, s="Hypoglycemic threshold", color="black", ha="left", fontsize=13)
+            #ax_left.text(x=-0.4, y=hyper + 0.2, s="Hyperglycemic threshold", color="black", ha="left", fontsize=13)
 
             # Labeling axes
             ax_left.set_xlabel('Time (hours)', fontsize=18)
@@ -108,13 +108,21 @@ class Plot(BasePlot):
             ax_left.grid(True, which='both', axis='x', linestyle='--', zorder=-999)  # Grid behind everything
 
             # Set title
-            plt.title(f"Predictions for {model_name} Model {prediction_horizon} Minutes PH", fontsize=20)
+            model_names_map = {
+                'loop_v2': 'Physiology-Based Model',
+                'naive_linear_regressor': 'Naïve Linear Regressor',
+                'ridge': 'Ridge Regressor',
+                'weighted_ridge': 'Weighted Loss Regressor',
+                'zero_order': 'Zero-Order Hold'
+            }
+            plt.title(f"{model_names_map[model_name]} {prediction_horizon}-minute PH", fontsize=20)
 
             plot_name = f'{model_name}_single_prediction_horizon_ph_{prediction_horizon}'
             plots.append(plt.gcf())
             names.append(plot_name)
 
             if show_plot:
+                plt.tight_layout()
                 plt.show()
             plt.close()
 

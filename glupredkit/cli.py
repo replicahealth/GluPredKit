@@ -432,7 +432,7 @@ def draw_plots(results_files, plots, prediction_horizons, type, show_plots, metr
 
         if plot in ['all_metrics_table', 'cgpm_table', 'confusion_matrix',
                     'pareto_frontier', 'scatter_plot', 'single_prediction_horizon',
-                    'weighted_loss']:
+                    'weighted_loss', 'cgpm_components_single_ph']:
             for prediction_horizon in prediction_horizons:
                 plts, plot_names = chosen_plot(dfs, show_plot=show_plots, prediction_horizon=prediction_horizon)
                 figures += plts
@@ -456,8 +456,7 @@ def draw_plots(results_files, plots, prediction_horizons, type, show_plots, metr
             names += plot_names
 
         else:
-            click.echo(f"Plot {plot} does not exist. Please look in the documentation for the existing plots.")
-            return
+            raise ValueError(f"Plot {plot} does not exist. Please look in the documentation for the existing plots.")
 
     gpk.save_figures(figures, names)
 

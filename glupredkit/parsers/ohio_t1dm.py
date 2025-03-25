@@ -5,6 +5,7 @@ the same time grid in a dataframe.
 from .base_parser import BaseParser
 import xml.etree.ElementTree as ET
 import pandas as pd
+import numpy as np
 import os
 import datetime
 
@@ -27,8 +28,23 @@ class Parser(BaseParser):
         df_training = self.resample_data(training_tree, is_test=False)
         df_testing = self.resample_data(testing_tree, is_test=True)
 
-        merged_df = pd.concat([df_testing, df_training], ignore_index=False)
+        # Use "combine first" to handle when df training and df testing is overlapping If df_test has a NaN for a
+        # particular index/column, it takes the value from df_train. If df_test has a valid value, it keeps it.
+        merged_df = df_testing.combine_first(df_training)
         merged_df = merged_df.sort_index()
+
+        # Add gender from gender map, gotten from the paper: https://pmc.ncbi.nlm.nih.gov/articles/PMC7881904/
+        merged_df['gender'] = get_gender(subject_id)
+
+        # Ensure 5-min intervals after merging train and test
+        merged_df.sort_index(inplace=True)
+        merged_df = merged_df.resample('5min').asfreq()
+        time_diffs = merged_df.index.to_series().diff()
+        expected_interval = pd.Timedelta(minutes=5)
+        valid_intervals = (time_diffs[1:] == expected_interval).all()
+        if not valid_intervals:
+            invalid_intervals = time_diffs[time_diffs != expected_interval]
+            print(f"invalid time intervals found:", invalid_intervals)
 
         return merged_df
 
@@ -36,6 +52,7 @@ class Parser(BaseParser):
         root = tree.getroot()
 
         dataframes = {}
+
         for child in root:
             tag_name = child.tag
             events = []
@@ -60,11 +77,10 @@ class Parser(BaseParser):
             df_carbs.rename(columns={'ts': 'date'}, inplace=True)
             df_carbs = df_carbs[['date', 'carbs']]
             df_carbs.set_index('date', inplace=True)
-            df_carbs = df_carbs.resample('5min', label='right').sum().fillna(value=0)
+            df_carbs = df_carbs.resample('5min', label='right').sum()
             df = pd.merge(df, df_carbs, on="date", how='outer')
-            df['carbs'] = df['carbs'].fillna(value=0.0)
         else:
-            df['carbs'] = 0.0
+            df['carbs'] = np.nan
 
         # Bolus doses
         df_bolus = dataframes['bolus'].copy()
@@ -73,9 +89,9 @@ class Parser(BaseParser):
         df_bolus.rename(columns={'ts_begin': 'date', 'dose': 'bolus'}, inplace=True)
         df_bolus = df_bolus[['date', 'bolus']]
         df_bolus.set_index('date', inplace=True)
-        df_bolus = df_bolus.resample('5min', label='right').sum().fillna(value=0)
+        df_bolus = df_bolus.resample('5min', label='right').sum()
         df = pd.merge(df, df_bolus, on="date", how='outer')
-        df['bolus'] = df['bolus'].fillna(value=0.0)
+        df['bolus'] = df['bolus']
 
         # Basal rates
         df_basal = dataframes['basal'].copy()
@@ -126,15 +142,15 @@ class Parser(BaseParser):
             df_exercise['ts'] = pd.to_datetime(df_exercise['ts'], format='%d-%m-%Y %H:%M:%S', errors='coerce')
             df_exercise['intensity'] = pd.to_numeric(df_exercise['intensity'], errors='coerce')
             df_exercise['duration'] = pd.to_numeric(df_exercise['duration'], errors='coerce')
-            df_exercise['end_date'] = df_exercise['ts'] + pd.to_timedelta(df_exercise['duration'], unit='m')
-            df_exercise.rename(columns={'ts': 'start_date', 'intensity': 'workout_intensity'}, inplace=True)
-            df['workout_intensity'] = 0
-            for idx, row in df_exercise.iterrows():
-                # Find the range in df that falls between start_date and end_date
-                mask = (df.index >= row['start_date']) & (df.index <= row['end_date'])
-                df.loc[mask, 'workout_intensity'] = row['workout_intensity']
+            df_exercise.rename(columns={'ts': 'date', 'intensity': 'workout_intensity', 'duration': 'workout_duration'}, inplace=True)
+            df_exercise.set_index('date', inplace=True)
+            df_exercise = df_exercise[['workout_intensity', 'workout_duration']]
+            df_exercise = df_exercise.resample('5min', label='right').mean()
+            df = pd.merge(df, df_exercise, on="date", how='outer')
 
         df['is_test'] = is_test
+        df['insulin_type'] = root.get('insulin_type').split(' ')[0].lower()
+
         return df.sort_index()
 
     @staticmethod
@@ -163,3 +179,22 @@ def merge_data_type_into_dataframe(df, data, type_name, value_name, use_mean=Tru
         return pd.merge(df, df_data_type, on="date", how='outer')
     else:
         return df
+
+
+def get_gender(subject_id):
+    gender_map = {
+        '540': 'M',
+        '544': 'M',
+        '552': 'M',
+        '567': 'F',
+        '584': 'M',
+        '596': 'M',
+        '559': 'F',
+        '563': 'M',
+        '570': 'M',
+        '575': 'F',
+        '588': 'F',
+        '591': 'F',
+    }
+    return gender_map[subject_id]
+

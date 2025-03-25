@@ -55,7 +55,7 @@ class Parser(BaseParser):
 
                 # Fill NaN where numbers were turned to 0 or strings were turned to ''
                 df_subject['meal_label'] = df_subject['meal_label'].replace('', np.nan)
-                df_subject['carbs'] = df_subject['carbs'].replace(0, np.nan).infer_objects(copy=False)
+                df_subject['carbs'] = df_subject['carbs'].infer_objects(copy=False).replace(0, np.nan)
             else:
                 df_subject['meal_label'] = np.nan
                 df_subject['carbs'] = np.nan
@@ -125,6 +125,9 @@ class Parser(BaseParser):
             # Ensuring homogenous time intervals
             df_subject = df_subject.resample('5min').asfreq()
 
+            # TODO: Remove this
+            print("DF SUBJECT NOT NA", df_subject[df_subject.notna()])
+
             processed_dfs.append(df_subject)
             print(f"{count}/{len(self.subject_ids)} are prepared")
             count += 1
@@ -150,9 +153,9 @@ class Parser(BaseParser):
         df_exercise = get_df_exercise(file_path, self.subject_ids)
         print("Exercise data processed", df_exercise)
         heartrate_dict = get_heartrate_dict(file_path, self.subject_ids)
-        print("Heartrate dict processed", heartrate_dict)
+        print("Heartrate dict processed", heartrate_dict[self.subject_ids[0]])
         steps_or_cal_burn_dict = get_steps_or_cal_burn_dict(file_path, self.subject_ids)
-        print("Steps or calories burned dict processed", steps_or_cal_burn_dict)
+        print("Steps or calories burned dict processed", steps_or_cal_burn_dict[self.subject_ids[0]])
 
         return df_glucose, df_meals, df_bolus, df_basal, df_exercise, heartrate_dict, steps_or_cal_burn_dict
 

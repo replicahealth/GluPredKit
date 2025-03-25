@@ -18,7 +18,7 @@ class Plot(BasePlot):
         # Plotting zone cost
         bg_values = np.linspace(18.6, 600, 500)
         cost_values = [zone_cost(bg) for bg in bg_values]
-        plt.figure(figsize=(10, 6))
+        plt.figure(figsize=(7, 4))
         plt.plot(bg_values, cost_values, label='Zone Cost', color='blue')
         plt.axvline(70, color='green', linestyle='--', label='Hypoglycemic Range (70)')
         plt.axvline(180, color='red', linestyle='--', label='Hyperglycemic Range (180)')
@@ -28,6 +28,8 @@ class Plot(BasePlot):
         plt.ylabel('Cost', fontsize=14)
         plt.legend(fontsize=12)
         plt.grid(True)
+        plt.tight_layout()
+        plt.show()
 
         plot_name = f'zone_cost'
         plots.append(plt.gcf())
@@ -39,7 +41,7 @@ class Plot(BasePlot):
         delta_bg_values = np.linspace(-18, 18, 100)
         bg_grid, delta_bg_grid = np.meshgrid(bg_values, delta_bg_values)
         cost_grid = np.array([[slope_cost(bg, delta_bg) for bg in bg_values] for delta_bg in delta_bg_values])
-        plt.figure(figsize=(10, 8))
+        plt.figure(figsize=(5, 4))
         plt.contourf(bg_grid, delta_bg_grid, cost_grid, cmap='RdYlGn_r', levels=50)
         plt.colorbar(label='Cost')
         plt.title('Slope Cost Function Heatmap', fontsize=16)
@@ -51,6 +53,7 @@ class Plot(BasePlot):
         names.append(plot_name)
 
         if show_plot:
+            plt.tight_layout()
             plt.show()
         plt.close()
 
@@ -69,7 +72,7 @@ class Plot(BasePlot):
             # Print the new cost function result for the weighted RMSE
             print(f"{model_name} {prediction_horizon} minutes: ", round(weighted_rmse(y_true, y_pred, weights=costs), 1))
 
-        """
+
         # Plot the results across different glucose regions
         df = pd.read_csv('data/raw/OhioT1DM.csv')
         df_train = df[~df['is_test']]
@@ -92,7 +95,7 @@ class Plot(BasePlot):
         plt.grid(axis='y', linestyle='--', alpha=0.7)
         plt.tight_layout()
         plt.show()
-        """
+
         return plots, names
 
 
