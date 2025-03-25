@@ -157,9 +157,11 @@ def parse(parser, username, password, start_date, file_path, end_date, output_fi
         if file_path is None:
             raise ValueError(f"{parser} parser requires that you provide --file-path")
         else:
-            parsed_data = chosen_parser(file_path=file_path)
-            output_file_name = "tidepool_dataset"
-            save_data(output_file_name=output_file_name, data=parsed_data)
+            for prefix in ['HCL150', 'SAP100', 'PA50']:
+                parsed_data = chosen_parser(prefix, file_path=file_path)
+                output_file_name = f"Tidepool-JDRF-{prefix}"
+                save_data(output_file_name=output_file_name, data=parsed_data)
+
             # Already split into train and test data
             return
     else:

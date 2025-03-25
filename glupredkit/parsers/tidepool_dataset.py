@@ -13,38 +13,68 @@ class Parser(BaseParser):
     def __init__(self):
         super().__init__()
 
-    def __call__(self, file_path: str, *args):
+    def __call__(self, prefix: str, file_path: str, *args):
         """
         file_path -- the file path to the tidepool dataset root folder.
         """
-        # TODO: Save PA, SAP, and HCL separately?
-        # TODO: Insulin types?
-        # TODO: add gender, age, ...
-        file_paths = {
-            #'HCL150': ['Tidepool-JDRF-HCL150-train', 'Tidepool-JDRF-HCL150-test'],
-            #'SAP100': ['Tidepool-JDRF-SAP100-train', 'Tidepool-JDRF-SAP100-test'],
-            'PA50': ['Tidepool-JDRF-PA50-train', 'Tidepool-JDRF-PA50-test']
-        }
-        all_dfs, all_ids, is_test_bools = [], [], []
-        for prefix, folders in file_paths.items():
-            for folder in folders:
-                # TODO: Each subject should be taken train/test chronologically so that we can "safe merge" them!
-                current_file_path = os.path.join(file_path, folder, 'train-data' if 'train' in folder else 'test-data')
-                is_test = True if 'test' in folder else False
-                all_dfs, all_ids, is_test_bools = get_dfs_and_ids(current_file_path, all_dfs, all_ids, is_test_bools, is_test, id_prefix=f'{prefix}-')
-
+        folders = [f'Tidepool-JDRF-{prefix}-train', f'Tidepool-JDRF-{prefix}-test']
         processed_dfs = []
-        for index, df in enumerate(all_dfs):
-            df_glucose, df_bolus, df_basal, df_carbs, df_workouts = self.get_dataframes(df)
-            df_resampled = self.resample_data(df_glucose, df_bolus, df_basal, df_carbs, df_workouts)
-            df_resampled['id'] = all_ids[index]
-            df_resampled['is_test'] = is_test_bools[index]
-            processed_dfs.append(df_resampled)
 
-        # TODO: add some validation here, for 5-min intervals, sorting, merging of test-train like in ohio
-        # TODO: sort by subject, and date
+        def get_file_path(folder):
+            is_test = 'test' in folder
+            return os.path.join(file_path, folder, 'test-data' if is_test else 'train-data')
+
+        train_dfs_dict = get_dfs_and_ids(get_file_path(folders[0]),  id_prefix=f'{prefix}-')
+        test_dfs_dict = get_dfs_and_ids(get_file_path(folders[1]),  id_prefix=f'{prefix}-')
+
+        # Validating that the train / test subjects are the same
+        if set(train_dfs_dict.keys()) == set(test_dfs_dict.keys()):
+            print(f"✅ The dictionaries in {prefix} have the same keys. Total keys: {len(set(train_dfs_dict.keys()))}")
+        else:
+            print(f"❌ The dictionaries have different keys.")
+
+        count = 0
+        for subject_id in train_dfs_dict.keys():
+            subject_train_df = train_dfs_dict[subject_id]
+            subject_test_df = train_dfs_dict[subject_id]
+
+            # add is_test column
+            subject_train_df['is_test'] = False
+            subject_test_df['is_test'] = True
+
+            def get_resampled_df(df):
+                df_glucose, df_bolus, df_basal, df_carbs, df_workouts = self.get_dataframes(df)
+                df_resampled = self.resample_data(df_glucose, df_bolus, df_basal, df_carbs, df_workouts)
+                return df_resampled
+
+            df_training = get_resampled_df(subject_train_df)
+            df_testing = get_resampled_df(subject_test_df)
+
+            merged_df = df_testing.combine_first(df_training)
+            merged_df = merged_df.sort_index()
+
+            # Ensure 5-min intervals after merging train and test
+            merged_df = merged_df.resample('5min').asfreq()
+            time_diffs = merged_df.index.to_series().diff()
+            expected_interval = pd.Timedelta(minutes=5)
+            valid_intervals = (time_diffs[1:] == expected_interval).all()
+            if not valid_intervals:
+                invalid_intervals = time_diffs[time_diffs != expected_interval]
+                print(f"invalid time intervals found:", invalid_intervals)
+
+            age, gender = get_age_and_gender(file_path, prefix, subject_id)
+            merged_df['age'] = age
+            merged_df['gender'] = gender
+            merged_df['id'] = subject_id
+
+            #print(merged_df)
+            processed_dfs.append(merged_df)
+
+            count += 1
+            print(f"{count}: Finished processing subject {subject_id}")
 
         df_final = pd.concat(processed_dfs)
+
         return df_final
 
     def resample_data(self, df_glucose, df_bolus, df_basal, df_carbs, df_workouts):
@@ -112,7 +142,7 @@ class Parser(BaseParser):
             ts_offset = 0.0
         else:
             ts_offset = grouped.loc[grouped['count'].idxmax(), 'est.timezoneOffset']
-        print("USER OFFSET", ts_offset)
+        #print("USER OFFSET", ts_offset)
 
         df['time'] = pd.to_datetime(df['time'], format='ISO8601', utc=True)
         df['time'] = df['time'].dt.tz_localize(None)
@@ -143,9 +173,11 @@ class Parser(BaseParser):
             for _, row in df[df['extended'].notna()].iterrows():
                 intervals = split_extended_bolus_into_intervals(row)
                 expanded_rows.extend(intervals)
-            df_extended_boluses = pd.DataFrame(expanded_rows)
-            df_extended_boluses.set_index('date', inplace=True)
-            df_bolus = pd.concat([df_bolus, df_extended_boluses])
+
+            if not len(expanded_rows) == 0:
+                df_extended_boluses = pd.DataFrame(expanded_rows)
+                df_extended_boluses.set_index('date', inplace=True)
+                df_bolus = pd.concat([df_bolus, df_extended_boluses])
         df_bolus.sort_values(by='date', inplace=True, ascending=True)
 
         # Dataframe basal rates
@@ -189,7 +221,7 @@ class Parser(BaseParser):
             df_carbs = pd.concat(carb_dfs)
         df_carbs.sort_values(by='date', inplace=True, ascending=True)
         df_carbs.set_index('date', inplace=True)
-        print("CARBS DF", df_carbs)
+        #print("CARBS DF", df_carbs)
 
         # Dataframe workouts
         df_workouts = pd.DataFrame
@@ -266,16 +298,34 @@ def split_extended_bolus_into_intervals(row):
     return rows
 
 
-def get_dfs_and_ids(file_path, all_dfs, all_ids, is_test_bools, is_test, id_prefix):
+def get_dfs_and_ids(file_path, id_prefix):
+    dfs_dict = {}
     for root, dirs, files in os.walk(file_path):
         for file in files:
             if file.endswith('.csv'):
                 subject_file_path = os.path.join(root, file)
                 df = pd.read_csv(subject_file_path, low_memory=False)
-                all_dfs.append(df)
-
                 subject_id = id_prefix + file.split("_")[1].split(".")[0]
-                all_ids.append(subject_id)
+                dfs_dict[subject_id] = df
+    return dfs_dict
 
-                is_test_bools.append(is_test)
-    return all_dfs, all_ids, is_test_bools
+
+def get_age_and_gender(file_path, prefix, subject_id):
+    folder = f'Tidepool-JDRF-{prefix}-train'
+    file_name = f'{prefix}-train-metadata-summary.csv'
+    full_subject_id = f'train_{subject_id.split("-")[1]}.csv'
+    file_path = os.path.join(file_path, folder, file_name)
+    metadata_df = pd.read_csv(file_path)
+    subject_data = metadata_df[metadata_df['file_name'] == full_subject_id]
+    # Future work to add exact age at exact time
+    age = subject_data['ageStart'].iloc[0]
+    gender = subject_data['biologicalSex'].iloc[0]
+    gender_map = {
+        'female': 'F',
+        'male': 'M'
+    }
+    if pd.notna(gender):
+        gender = gender_map[gender]
+    return age, gender
+
+
