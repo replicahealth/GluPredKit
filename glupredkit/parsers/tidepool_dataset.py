@@ -27,7 +27,7 @@ class Parser(BaseParser):
         all_dfs, all_ids, is_test_bools = [], [], []
         for prefix, folders in file_paths.items():
             for folder in folders:
-                # TODO: Each subject should be taken train/test cronologically so that we can "safe merge" them!
+                # TODO: Each subject should be taken train/test chronologically so that we can "safe merge" them!
                 current_file_path = os.path.join(file_path, folder, 'train-data' if 'train' in folder else 'test-data')
                 is_test = True if 'test' in folder else False
                 all_dfs, all_ids, is_test_bools = get_dfs_and_ids(current_file_path, all_dfs, all_ids, is_test_bools, is_test, id_prefix=f'{prefix}-')
@@ -102,37 +102,46 @@ class Parser(BaseParser):
         return df
 
     def get_dataframes(self, df):
-        # We use the local time as time consistently, and ignore that people might travel even though there will be some
-        # data that is wrong because of this. But there is not enough consistent time zone data available
-        print("COUNTS", df[['est.localTime', 'time']].value_counts())
+        # We find the subject time zone offset by finding the offset most often present, if any. If not, use UTC time
+        # Future work should look at whether the local times are safe to use, validate that offsets are consistent across datatypes
+        # If yes, we could just use local time when available, and default back to UTC when unavailable
+        grouped = df.groupby('est.timezoneOffset').size().reset_index(name='count')
+        if grouped.empty:
+            ts_offset = 0.0
+        else:
+            ts_offset = grouped.loc[grouped['count'].idxmax(), 'est.timezoneOffset']
+        print("USER OFFSET", ts_offset)
 
-        df['est.localTime'] = pd.to_datetime(df['est.localTime'])
-        print("COUNTS AFTER", df[['est.localTime', 'time']].value_counts())
+        df['time'] = pd.to_datetime(df['time'], format='ISO8601', utc=True)
+        df['time'] = df['time'].dt.tz_localize(None)
+        df['date'] = df['time']
+        df['date'] = df.apply(
+            lambda row: row['date'] + pd.to_timedelta(ts_offset, unit='m'),
+            axis=1
+        )
 
         # Dataframe blood glucose
         # cbg = continuous blood glucose, smbg = self-monitoring of blood glucose
         #df_glucose = df[df['type'] == 'cbg'][['time', 'units', 'value']]
-        df_glucose = df[df['type'].isin(['cbg', 'smbg'])][['est.localTime', 'units', 'value']]
+        df_glucose = df[df['type'].isin(['cbg', 'smbg'])][['date', 'units', 'value']]
         df_glucose['value'] = df_glucose.apply(
             lambda row: row['value'] * 18.0182 if row['units'] == 'mmol/L' else row['value'], axis=1)
-        df_glucose.rename(columns={"est.localTime": "date", "value": "CGM"}, inplace=True)
+        df_glucose.rename(columns={"value": "CGM"}, inplace=True)
         df_glucose.drop(columns=['units'], inplace=True)
         df_glucose.sort_values(by='date', inplace=True, ascending=True)
         df_glucose.set_index('date', inplace=True)
 
         # Dataframe bolus doses
-        df_bolus = df[df['type'] == 'bolus'][['est.localTime', 'normal']]
-        df_bolus.rename(columns={"est.localTime": "date", "normal": "bolus"}, inplace=True)
+        df_bolus = df[df['type'] == 'bolus'][['date', 'normal']]
+        df_bolus.rename(columns={"normal": "bolus"}, inplace=True)
         df_bolus.sort_values(by='date', inplace=True, ascending=True)
         df_bolus.set_index('date', inplace=True)
 
         # Dataframe basal rates
-        df_basal = df[df['type'] == 'basal'][['est.localTime', 'duration', 'rate', 'units', 'deliveryType']].copy()
-        print(df_basal)
-
+        df_basal = df[df['type'] == 'basal'][['date', 'duration', 'rate', 'units', 'deliveryType']].copy()
         df_basal['duration'] = df_basal['duration'] / 1000  # convert to seconds
         df_basal['duration'] = df_basal['duration'].fillna(0)
-        df_basal.rename(columns={"est.localTime": "date", "rate": "basal"}, inplace=True)
+        df_basal.rename(columns={"rate": "basal"}, inplace=True)
         df_basal.sort_values(by='date', inplace=True, ascending=True)
         df_basal.loc[df_basal['deliveryType'] == 'suspend', 'basal'] = 0.0  # Set suspend values to 0.0
         # Remove duplicate start dates, we choose the first as we cannot know exactly what to do
@@ -151,24 +160,24 @@ class Parser(BaseParser):
             intervals = split_basal_into_intervals(row)
             expanded_rows.extend(intervals)
         df_basal = pd.DataFrame(expanded_rows)
-        print(df_basal)
         df_basal.set_index('date', inplace=True)
 
         # Dataframe carbohydrates
         df_carbs = pd.DataFrame()
-        # TODO: could also be both
-        if 'nutrition.carbohydrate.net' in df.columns:
-            df_carbs = df[df['type'] == 'food'][['est.localTime', 'nutrition.carbohydrate.net']]
-            df_carbs.rename(columns={"est.localTime": "date", "nutrition.carbohydrate.net": "carbs"}, inplace=True)
-        elif 'carbInput' in df.columns:
-            df_carbs = df[['time', 'carbInput', 'type']][df['carbInput'].notna()]
-            df_carbs.rename(columns={"time": "date", "carbInput": "carbs"}, inplace=True)
-        else:
-            for col in df.columns:
-                print(f"{col}: {df[col].unique()[:8]}")
+        carb_dfs = []
+        for carb_col in ['nutrition.carbohydrate.net', 'carbInput']:
+            if carb_col in df.columns:
+                df_carbs = df[df['type'] == 'food'][['date', carb_col]]
+                df_carbs.rename(columns={"nutrition.carbohydrate.net": "carbs"}, inplace=True)
+                carb_dfs += [df_carbs]
+
+        if len(carb_dfs) == 0:
             assert ValueError("No carbohydrate data detected for subject! Inspect data.")
+        else:
+            df_carbs = pd.concat(carb_dfs)
         df_carbs.sort_values(by='date', inplace=True, ascending=True)
         df_carbs.set_index('date', inplace=True)
+        print("CARBS DF", df_carbs)
 
         # Dataframe workouts
         df_workouts = pd.DataFrame
@@ -176,7 +185,7 @@ class Parser(BaseParser):
             df_workouts = df.copy()[df['activityName'].notna()]
             if not df_workouts.empty:
                 if 'activityDuration.value' in df_workouts.columns:
-                    df_workouts.rename(columns={"est.localTime": "date", "activityName": "workout_label",
+                    df_workouts.rename(columns={"activityName": "workout_label",
                                                 "activityDuration.value": "workout_duration"}, inplace=True)
                     df_workouts.sort_values(by='date', inplace=True, ascending=True)
 
