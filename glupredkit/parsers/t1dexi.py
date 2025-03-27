@@ -125,9 +125,6 @@ class Parser(BaseParser):
             # Ensuring homogenous time intervals
             df_subject = df_subject.resample('5min').asfreq()
 
-            # TODO: Remove this
-            print("DF SUBJECT NOT NA", df_subject[df_subject.notna()])
-
             processed_dfs.append(df_subject)
             print(f"{count}/{len(self.subject_ids)} are prepared")
             count += 1

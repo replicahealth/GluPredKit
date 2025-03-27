@@ -108,15 +108,7 @@ class Plot(BasePlot):
             ax_left.grid(True, which='both', axis='x', linestyle='--', zorder=-999)  # Grid behind everything
 
             # Set title
-            model_names_map = {
-                'loop_v2': 'Physiology-Based Model',
-                'naive_linear_regressor': 'Naïve Linear Regressor',
-                'ridge': 'Ridge Regressor',
-                'weighted_ridge': 'Weighted Loss Regressor',
-                'zero_order': 'Zero-Order Hold'
-            }
-            plt.title(f"{model_names_map[model_name]} {prediction_horizon}-minute PH", fontsize=20)
-
+            plt.title(f"{model_name} {prediction_horizon}-minute PH", fontsize=20)
             plot_name = f'{model_name}_single_prediction_horizon_ph_{prediction_horizon}'
             plots.append(plt.gcf())
             names.append(plot_name)

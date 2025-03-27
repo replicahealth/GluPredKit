@@ -21,14 +21,6 @@ class Plot(BasePlot):
         # Creates results df
         for df in dfs:
             model_name = df['Model Name'][0]
-            model_names_map = {
-                'loop_v2': 'Physiology-Based Model',
-                'naive_linear_regressor': 'Naïve Linear Regressor',
-                'ridge': 'Ridge Regressor',
-                'weighted_ridge': 'Weighted Loss Regressor',
-                'zero_order': 'Zero-Order Hold'
-            }
-            model_name = model_names_map[model_name]
             row = {"Model Name": model_name}
 
             for metric_name in metrics:
@@ -47,8 +39,6 @@ class Plot(BasePlot):
             else:
                 results_df['rmse'] = results_df['rmse'].apply(lambda x: x / max(max_rmse, 1))
 
-        print("SCALED DF", results_df)
-
         def pareto_frontier(df, normalize_results):
             """
             Find the Pareto frontier from the DataFrame with metrics.
@@ -56,8 +46,6 @@ class Plot(BasePlot):
             A model is dominated if another model has better (lower) performance across all metrics.
             """
             pareto_front = []
-
-            print("results here", results_df)
 
             # Change so that low value is better
             if not normalize_results:

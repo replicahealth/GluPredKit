@@ -142,7 +142,6 @@ class Parser(BaseParser):
             ts_offset = 0.0
         else:
             ts_offset = grouped.loc[grouped['count'].idxmax(), 'est.timezoneOffset']
-        #print("USER OFFSET", ts_offset)
 
         df['time'] = pd.to_datetime(df['time'], format='ISO8601', utc=True)
         df['time'] = df['time'].dt.tz_localize(None)
@@ -311,9 +310,9 @@ def get_dfs_and_ids(file_path, id_prefix):
 
 
 def get_age_and_gender(file_path, prefix, subject_id):
-    folder = f'Tidepool-JDRF-{prefix}-train'
-    file_name = f'{prefix}-train-metadata-summary.csv'
-    full_subject_id = f'train_{subject_id.split("-")[1]}.csv'
+    folder = f'Tidepool-JDRF-{prefix}-test'
+    file_name = f'{prefix}-test-metadata-summary.csv'
+    full_subject_id = f'test_{subject_id.split("-")[1]}.csv'
     file_path = os.path.join(file_path, folder, file_name)
     metadata_df = pd.read_csv(file_path)
     subject_data = metadata_df[metadata_df['file_name'] == full_subject_id]
@@ -325,7 +324,7 @@ def get_age_and_gender(file_path, prefix, subject_id):
         'male': 'M'
     }
     if pd.notna(gender):
-        gender = gender_map[gender]
+        gender = gender_map[gender.lower()]
     return age, gender
 
 
