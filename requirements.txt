@@ -15,6 +15,7 @@ error-grids
 methcomp
 wandb
 python-dotenv
+zipfile_deflate64
 # xport
 # Optional heavy dependencies
 # tensorflow==2.14.0

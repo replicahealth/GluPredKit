@@ -137,12 +137,12 @@ def parse(parser, username, password, start_date, file_path, end_date, output_fi
         if file_path is None:
             raise ValueError(f"{parser} parser requires that you provide --file-path")
         else:
-            folder_1 = os.path.join(file_path, 'T1DEXI - DATA FOR UPLOAD')
+            folder_1 = os.path.join(file_path, 'T1DEXI.zip')
             parsed_data_1 = chosen_parser(file_path=folder_1)
             parsed_data_1 = helpers.add_is_test_column(parsed_data_1, test_size)
             save_data(output_file_name="T1DEXI", data=parsed_data_1)
 
-            folder_2 = os.path.join(file_path, 'T1DEXIP - DATA FOR UPLOAD')
+            folder_2 = os.path.join(file_path, 'T1DEXIP.zip')
             parsed_data_2 = chosen_parser(file_path=folder_2)
             parsed_data_2 = helpers.add_is_test_column(parsed_data_2, test_size)
             save_data(output_file_name="T1DEXIP", data=parsed_data_2)
@@ -157,9 +157,11 @@ def parse(parser, username, password, start_date, file_path, end_date, output_fi
         if file_path is None:
             raise ValueError(f"{parser} parser requires that you provide --file-path")
         else:
-            parsed_data = chosen_parser(file_path=file_path)
-            output_file_name = "tidepool_dataset"
-            save_data(output_file_name=output_file_name, data=parsed_data)
+            for prefix in ['HCL150', 'SAP100', 'PA50']:
+                parsed_data = chosen_parser(prefix, file_path=file_path)
+                output_file_name = f"Tidepool-JDRF-{prefix}"
+                save_data(output_file_name=output_file_name, data=parsed_data)
+
             # Already split into train and test data
             return
     else:
@@ -432,7 +434,7 @@ def draw_plots(results_files, plots, prediction_horizons, type, show_plots, metr
 
         if plot in ['all_metrics_table', 'cgpm_table', 'confusion_matrix',
                     'pareto_frontier', 'scatter_plot', 'single_prediction_horizon',
-                    'weighted_loss']:
+                    'weighted_loss', 'cgpm_components_single_ph']:
             for prediction_horizon in prediction_horizons:
                 plts, plot_names = chosen_plot(dfs, show_plot=show_plots, prediction_horizon=prediction_horizon)
                 figures += plts
@@ -456,8 +458,7 @@ def draw_plots(results_files, plots, prediction_horizons, type, show_plots, metr
             names += plot_names
 
         else:
-            click.echo(f"Plot {plot} does not exist. Please look in the documentation for the existing plots.")
-            return
+            raise ValueError(f"Plot {plot} does not exist. Please look in the documentation for the existing plots.")
 
     gpk.save_figures(figures, names)
 

@@ -210,7 +210,7 @@ glupredkit parse --parser open_aps --file-path data/raw/
 
 #### Example T1DEXI Parser
 
-Parsing data from T1DEXI and T1DEXIP. For this example, place the dataset in `data/raw`.
+Parsing data from T1DEXI and T1DEXIP. For this example, place the dataset in `data/raw` (you can add the .zip files unextracted).
 ```
 glupredkit parse --parser t1dexi --file-path data/raw/
 ```

@@ -37,7 +37,8 @@ setup(
         "error-grids",
         "methcomp",
         "wandb",
-        "python-dotenv"
+        "python-dotenv",
+        "zipfile_deflate64",
     ],
     extras_require={
         'heavy': [
