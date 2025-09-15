@@ -14,6 +14,9 @@ import xport
 import numpy as np
 import datetime
 import zipfile_deflate64
+import zipfile
+import tempfile
+import os
 
 
 class Parser(BaseParser):
@@ -29,6 +32,11 @@ class Parser(BaseParser):
         self.subject_ids = get_valid_subject_ids(file_path)
         df_glucose, df_meals, df_bolus, df_basal, df_exercise, heartrate_dict, steps_or_cal_burn_dict = self.get_dataframes(file_path)
         df_resampled = self.resample_data(df_glucose, df_meals, df_bolus, df_basal, df_exercise, heartrate_dict, steps_or_cal_burn_dict)
+        
+        # Add demographics and metadata columns
+        print("Adding demographics and metadata columns...")
+        df_resampled = self.add_metadata_columns(df_resampled, file_path)
+        
         return df_resampled
 
     def resample_data(self, df_glucose, df_meals, df_bolus, df_basal, df_exercise, heartrate_dict, steps_or_cal_burn_dict):
@@ -156,6 +164,710 @@ class Parser(BaseParser):
 
         return df_glucose, df_meals, df_bolus, df_basal, df_exercise, heartrate_dict, steps_or_cal_burn_dict
 
+    def add_metadata_columns(self, df, file_path):
+        """Add demographics and metadata columns to the processed dataframe"""
+        
+        # Determine if this is T1DEXIP dataset
+        is_t1dexip = 'T1DEXIP' in file_path
+        
+        # Get demographics and device data
+        print("Getting demographics data...")
+        demographics = get_demographics_data(file_path, is_t1dexip)
+        
+        print("Getting insulin delivery device data...")
+        device_info = get_insulin_delivery_devices(file_path)
+        
+        # Extract real age/diagnosis data from the dataset
+        print("Extracting age and diagnosis data from raw dataset...")
+        age_diagnosis_data = extract_age_diagnosis_data(file_path, is_t1dexip)
+        
+        # Extract real insulin data from the dataset
+        print("Extracting insulin types from raw dataset...")
+        insulin_df = extract_insulin_data_from_cm(file_path, use_deflate64=not is_t1dexip)
+        
+        # Create patient insulin mapping based on real data
+        print("Creating patient insulin mapping...")
+        insulin_mapping = create_patient_insulin_mapping(insulin_df, self.subject_ids, device_info)
+        
+        # Process each subject's metadata
+        unique_subjects = df['id'].unique()
+        metadata_records = []
+        
+        for subject_id in unique_subjects:
+            subject_demographics = demographics.get(subject_id, {})
+            subject_device = device_info.get(subject_id, '')
+            subject_age_data = age_diagnosis_data.get(subject_id, {})
+            
+            # Basic demographics
+            age = subject_demographics.get('age')
+            race = subject_demographics.get('race')
+            ethnic = subject_demographics.get('ethnic')
+            
+            # Process insulin delivery information
+            normalized_device, algorithm = normalize_device_name_and_get_algorithm(subject_device)
+            modality = categorize_insulin_delivery_modality(subject_device)
+            cgm_device = get_cgm_for_insulin_device(subject_device)
+            
+            # Process ethnicity
+            ethnicity = standardize_ethnicity(race, ethnic)
+            
+            # Get real diagnosis age if available, otherwise calculate from years since diagnosis
+            diagnosis_age = subject_age_data.get('age_of_diagnosis')
+            if diagnosis_age is None:
+                years_since = subject_age_data.get('years_since_diagnosis')
+                if years_since is not None and age is not None:
+                    try:
+                        diagnosis_age = float(age) - float(years_since)
+                        diagnosis_age = max(0, diagnosis_age)  # Ensure non-negative
+                    except:
+                        pass
+            
+            if diagnosis_age is not None:
+                diagnosis_age = round(float(diagnosis_age), 1)
+            
+            # Get real insulin types from extracted data
+            patient_insulin = insulin_mapping.get(str(subject_id), {})
+            bolus_insulin = patient_insulin.get('bolus')
+            basal_insulin = patient_insulin.get('basal')
+            
+            metadata_records.append({
+                'id': subject_id,
+                'insulin_delivery_device': normalized_device,
+                'insulin_delivery_algorithm': algorithm,
+                'insulin_delivery_modality': modality,
+                'cgm_device': cgm_device,
+                'ethnicity': ethnicity,
+                'age_of_diagnosis': diagnosis_age,
+                'insulin_type_bolus': bolus_insulin,
+                'insulin_type_basal': basal_insulin,
+                'is_pregnant': np.nan  # No pregnancy data found in original files
+            })
+        
+        # Create metadata DataFrame
+        df_metadata = pd.DataFrame(metadata_records)
+        
+        # Merge metadata with main dataframe
+        df = df.merge(df_metadata, on='id', how='left')
+        
+        print(f"Added metadata columns for {len(unique_subjects)} subjects")
+        print("New columns:", [col for col in df_metadata.columns if col != 'id'])
+        
+        # Print statistics about real data found
+        diagnosis_count = df_metadata['age_of_diagnosis'].notna().sum()
+        insulin_count = df_metadata['insulin_type_bolus'].notna().sum()
+        print(f"Real diagnosis age data found for {diagnosis_count}/{len(unique_subjects)} subjects")
+        print(f"Real insulin data found for {insulin_count}/{len(unique_subjects)} subjects")
+        
+        return df
+
+
+# ======= DEMOGRAPHICS AND METADATA FUNCTIONS =======
+
+def get_cgm_for_insulin_device(insulin_device):
+    """Map CGM device based on insulin delivery system compatibility"""
+    
+    if pd.isna(insulin_device) or insulin_device == '':
+        return 'Unknown'
+    
+    device_str = str(insulin_device).upper()
+    
+    # Tandem systems typically use Dexcom CGM
+    if 'TANDEM' in device_str and 'CONTROL IQ' in device_str:
+        return 'DEXCOM G6'  # Control-IQ requires Dexcom G6
+    elif 'TANDEM' in device_str and 'BASAL IQ' in device_str:
+        return 'DEXCOM G6'  # Basal-IQ also uses Dexcom G6
+    elif 'TANDEM' in device_str:
+        return 'DEXCOM G6'  # Most Tandem pumps in these studies likely use Dexcom
+    
+    # Medtronic systems use Guardian CGM
+    elif 'MEDTRONIC' in device_str and 'AUTO MODE' in device_str:
+        if '670G' in device_str:
+            return 'MEDTRONIC GUARDIAN SENSOR 3'
+        elif '770G' in device_str:
+            return 'MEDTRONIC GUARDIAN SENSOR 3'
+        else:
+            return 'MEDTRONIC GUARDIAN'
+    elif 'MEDTRONIC' in device_str:
+        return 'MEDTRONIC GUARDIAN'
+    
+    # Omnipod systems
+    elif 'OMNIPOD 5' in device_str:
+        return 'DEXCOM G6'  # Omnipod 5 integrates with Dexcom G6
+    elif 'OMNIPOD' in device_str:
+        return 'Unknown'  # Older Omnipod systems don't have integrated CGM
+    
+    # Multiple daily injections - could use any CGM
+    elif 'MULTIPLE DAILY INJECTIONS' in device_str:
+        return 'Unknown'  # MDI patients could use any CGM or none
+    
+    else:
+        return 'Unknown'
+
+
+def standardize_ethnicity(race, ethnic):
+    """Standardize ethnicity following DCLP format"""
+    
+    # Handle missing data
+    if pd.isna(race) and pd.isna(ethnic):
+        return None
+    
+    ethnicities = []
+    
+    # Process race information
+    if pd.notna(race):
+        race_str = str(race).strip()
+        if race_str.upper() == 'WHITE':
+            ethnicities.append('White')
+        elif race_str.upper() == 'BLACK/AFRICAN AMERICAN':
+            ethnicities.append('Black/African American')
+        elif race_str.upper() == 'ASIAN':
+            ethnicities.append('Asian')
+        elif race_str.upper() == 'AMERICAN INDIAN/ALASKAN NATIVE':
+            ethnicities.append('American Indian/Alaskan Native')
+        elif race_str.upper() == 'MULTIPLE':
+            # We'll handle multiple separately if needed
+            pass
+        elif race_str.upper() in ['NOT REPORTED', 'UNKNOWN', 'DO NOT WISH TO ANSWER']:
+            # Don't add anything for these cases
+            pass
+    
+    # Process Hispanic/Latino ethnicity
+    if pd.notna(ethnic):
+        ethnic_str = str(ethnic).strip()
+        if ethnic_str.upper() == 'HISPANIC OR LATINO':
+            ethnicities.append('Hispanic/Latino')
+    
+    # Return combined ethnicity or None if nothing found
+    if ethnicities:
+        return ', '.join(ethnicities)
+    else:
+        return None
+
+
+def categorize_insulin_delivery_modality(device):
+    """Categorize insulin delivery device into modality"""
+    
+    if pd.isna(device) or device == '':
+        return None
+    
+    device_str = str(device).upper()
+    
+    # MDI - Multiple Daily Injections
+    if 'MULTIPLE DAILY INJECTIONS' in device_str:
+        return 'MDI'
+    
+    # SAP - Sensor Augmented Pump
+    # Omnipod (excluding Omnipod 5)
+    if 'OMNIPOD' in device_str and 'OMNIPOD 5' not in device_str:
+        return 'SAP'
+    
+    # Medtronic 770G and 670G in manual mode
+    if ('770G' in device_str and 'MANUAL' in device_str) or ('670G' in device_str and 'MANUAL' in device_str):
+        return 'SAP'
+    
+    # Older Medtronic models (lower number than 670G)
+    medtronic_sap_models = ['630G', '640G', '551', '530G', '751', '522', '523', '723']
+    if any(model in device_str for model in medtronic_sap_models):
+        return 'SAP'
+    
+    # Check for Paradigm series (older models)
+    if 'PARADIGM' in device_str:
+        return 'SAP'
+    
+    # AID - Automated Insulin Delivery (everything else)
+    # This includes:
+    # - Tandem with Control-IQ or Basal-IQ
+    # - Medtronic 670G/770G in Auto Mode
+    # - Omnipod 5
+    # - Any other modern pump systems
+    return 'AID'
+
+
+def normalize_device_name_and_get_algorithm(device):
+    """Normalize device name and determine insulin delivery algorithm"""
+    
+    if pd.isna(device) or device == '':
+        return None, None
+    
+    device_str = str(device).upper()
+    
+    # MDI - Multiple Daily Injections
+    if 'MULTIPLE DAILY INJECTIONS' in device_str:
+        return 'Multiple Daily Injections', np.nan
+    
+    # OmniPod systems
+    if 'OMNIPOD' in device_str:
+        if 'OMNIPOD 5' in device_str:
+            return 'OmniPod 5', 'OmniPod 5'
+        elif 'INSULET OMNIPOD INSULIN MANAGEMENT SYSTEM' in device_str:
+            return 'OmniPod', 'Bolus-Basal'
+        else:
+            return 'OmniPod', 'Bolus-Basal'
+    
+    # Tandem t:slim X2 systems
+    if 'TANDEM T:SLIM X2' in device_str:
+        if 'CONTROL IQ' in device_str or 'CONTROL-IQ' in device_str:
+            return 't:slim X2', 'Control-IQ'
+        elif 'BASAL IQ' in device_str or 'BASAL-IQ' in device_str:
+            return 't:slim X2', 'Basal-IQ'
+        elif device_str == 'TANDEM T:SLIM X2':
+            return 't:slim X2', np.nan
+        else:
+            return 't:slim X2', np.nan
+    
+    # Other Tandem systems (like Tandem T:Slim without X2)
+    if 'TANDEM T:SLIM' in device_str and 'X2' not in device_str:
+        return 'Tandem t:slim', np.nan
+    
+    # Medtronic systems
+    if 'MEDTRONIC' in device_str:
+        # Manual mode systems
+        if 'MANUAL' in device_str:
+            if '670G' in device_str:
+                return 'MiniMed 670G', 'Basal-Bolus'
+            elif '770G' in device_str:
+                return 'MiniMed 770G', 'Basal-Bolus'
+            else:
+                # Extract model number for other manual systems
+                for model in ['780G', '630G', '640G', '551', '530G', '751', '522', '523', '723']:
+                    if model in device_str:
+                        return f'MiniMed {model}', 'Basal-Bolus'
+                return device_str, 'Basal-Bolus'
+        
+        # Newer models in auto mode
+        elif '670G' in device_str:
+            return 'MiniMed 670G', '670G'
+        elif '770G' in device_str:
+            return 'MiniMed 770G', '770G'
+        elif '780G' in device_str:
+            return 'MiniMed 780G', '780G'
+        
+        # Older models (always basal-bolus)
+        elif any(model in device_str for model in ['630G', '640G', '551', '530G', '751', '522', '523', '723']):
+            for model in ['630G', '640G', '551', '530G', '751', '522', '523', '723']:
+                if model in device_str:
+                    return f'MiniMed {model}', 'Basal-Bolus'
+        
+        # Paradigm series
+        elif 'PARADIGM' in device_str:
+            return 'MiniMed Paradigm', 'Basal-Bolus'
+    
+    # Default case - return normalized version of original
+    normalized = device.title()  # Convert to proper case
+    return normalized, np.nan
+
+
+def standardize_insulin_name(cmtrt, cmscat):
+    """Standardize insulin names to consistent format"""
+    
+    if pd.isna(cmtrt):
+        return None
+        
+    cmtrt_upper = str(cmtrt).upper()
+    
+    # Handle generic insulin based on subcategory
+    if cmtrt_upper in ['BOLUS INSULIN', 'RAPID ACTING INSULIN']:
+        return 'Bolus Insulin (Generic)'
+    elif cmtrt_upper in ['BASAL INSULIN', 'LONG ACTING INSULIN']:
+        return 'Basal Insulin (Generic)'
+    elif cmtrt_upper in ['PUMP OR CLOSED LOOP INSULIN', 'INSULIN PUMP']:
+        return 'Pump Insulin (Generic)'
+    
+    # Humalog (Lispro)
+    if 'HUMALOG' in cmtrt_upper:
+        if 'U-200' in cmtrt_upper:
+            return 'Humalog U-200 (Lispro)'
+        return 'Humalog (Lispro)'
+    
+    # Novolog/NovoRapid (Aspart)
+    if 'NOVOLOG' in cmtrt_upper or 'NOVORAPID' in cmtrt_upper:
+        return 'Novolog (Aspart)'
+    
+    # Apidra (Glulisine)
+    if 'APIDRA' in cmtrt_upper:
+        return 'Apidra (Glulisine)'
+    
+    # Fiasp (Fast-acting Aspart)
+    if 'FIASP' in cmtrt_upper:
+        return 'Fiasp (Aspart)'
+    
+    # Admelog (Lispro biosimilar)
+    if 'ADMELOG' in cmtrt_upper:
+        return 'Admelog (Lispro)'
+    
+    # Lyumjev (Ultra-rapid Lispro)
+    if 'LYUMJEV' in cmtrt_upper:
+        return 'Lyumjev (Lispro)'
+    
+    # Lantus (Glargine)
+    if 'LANTUS' in cmtrt_upper:
+        return 'Lantus (Glargine)'
+    
+    # Basaglar (Glargine biosimilar)
+    if 'BASAGLAR' in cmtrt_upper:
+        return 'Basaglar (Glargine)'
+    
+    # Tresiba (Degludec)
+    if 'TRESIBA' in cmtrt_upper:
+        return 'Tresiba (Degludec)'
+    
+    # Levemir (Detemir)
+    if 'LEVEMIR' in cmtrt_upper:
+        return 'Levemir (Detemir)'
+    
+    # Toujeo (Glargine U-300)
+    if 'TOUJEO' in cmtrt_upper:
+        return 'Toujeo (Glargine)'
+    
+    # Semglee (Glargine biosimilar)
+    if 'SEMGLEE' in cmtrt_upper:
+        return 'Semglee (Glargine)'
+    
+    # Regular insulin
+    if 'REGULAR' in cmtrt_upper or cmtrt_upper == 'R':
+        return 'Regular Insulin'
+    
+    # Return original if no match
+    return cmtrt
+
+
+def categorize_insulin_type(insulin_name, cmscat):
+    """Categorize insulin as bolus, basal, or pump"""
+    
+    if pd.isna(insulin_name):
+        return None
+        
+    insulin_upper = str(insulin_name).upper()
+    cmscat_upper = str(cmscat).upper() if not pd.isna(cmscat) else ''
+    
+    # Pump/Closed loop
+    if 'PUMP' in cmscat_upper or 'CLOSED LOOP' in cmscat_upper or 'PUMP' in insulin_upper:
+        return 'pump'
+    
+    # Basal insulins (long-acting)
+    if any(basal in insulin_upper for basal in ['LANTUS', 'BASAGLAR', 'TRESIBA', 'LEVEMIR', 'TOUJEO', 'SEMGLEE', 'BASAL', 'GLARGINE', 'DEGLUDEC', 'DETEMIR']):
+        return 'basal'
+    
+    # Bolus insulins (rapid-acting)
+    if any(bolus in insulin_upper for bolus in ['HUMALOG', 'NOVOLOG', 'NOVORAPID', 'APIDRA', 'FIASP', 'ADMELOG', 'LYUMJEV', 'BOLUS', 'LISPRO', 'ASPART', 'GLULISINE']):
+        return 'bolus'
+    
+    # Regular insulin is typically used as bolus
+    if 'REGULAR' in insulin_upper:
+        return 'bolus'
+    
+    return 'unknown'
+
+
+def extract_insulin_data_from_cm(file_path, use_deflate64=False):
+    """Extract insulin data from CM.xpt file in ZIP archive"""
+    
+    insulin_data = []
+    
+    try:
+        if use_deflate64:
+            with zipfile_deflate64.ZipFile(file_path, 'r') as zip_file:
+                cm_files = [f for f in zip_file.namelist() if f.endswith('CM.xpt')]
+                
+                if cm_files:
+                    with zip_file.open(cm_files[0]) as xpt_file:
+                        df_cm = xport.to_dataframe(xpt_file)
+        else:
+            with zipfile.ZipFile(file_path, 'r') as z:
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    cm_files = [f for f in z.namelist() if f.endswith('CM.xpt')]
+                    
+                    if cm_files:
+                        z.extract(cm_files[0], temp_dir)
+                        full_path = os.path.join(temp_dir, cm_files[0])
+                        
+                        df_cm = pd.read_sas(full_path, format='xport')
+                        
+                        # Convert bytes to strings
+                        for col in df_cm.columns:
+                            if df_cm[col].dtype == 'object':
+                                try:
+                                    df_cm[col] = df_cm[col].apply(lambda x: x.decode('utf-8') if isinstance(x, bytes) else x)
+                                except:
+                                    pass
+        
+        # Filter for diabetes treatments
+        if 'CMCAT' in df_cm.columns:
+            diabetes_meds = df_cm[df_cm['CMCAT'].str.upper() == 'DIABETES TREATMENT']
+            
+            for _, row in diabetes_meds.iterrows():
+                usubjid = row['USUBJID']
+                cmtrt = row['CMTRT']
+                cmscat = row.get('CMSCAT', '')
+                
+                standardized_name = standardize_insulin_name(cmtrt, cmscat)
+                insulin_type = categorize_insulin_type(standardized_name, cmscat)
+                
+                insulin_data.append({
+                    'usubjid': usubjid,
+                    'original_name': cmtrt,
+                    'standardized_name': standardized_name,
+                    'insulin_type': insulin_type,
+                    'subcategory': cmscat
+                })
+    
+    except Exception as e:
+        print(f"Error extracting insulin data: {e}")
+    
+    return pd.DataFrame(insulin_data)
+
+
+def extract_age_diagnosis_data(file_path, is_t1dexip=False):
+    """Extract age and diagnosis information from dataset"""
+    
+    age_diagnosis_data = {}
+    
+    try:
+        if is_t1dexip:
+            with zipfile.ZipFile(file_path, 'r') as z:
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    xpt_files = [f for f in z.namelist() if f.endswith('.xpt')]
+                    
+                    # Check DM.xpt for basic demographics
+                    dm_files = [f for f in xpt_files if f.endswith('DM.xpt')]
+                    suppdm_files = [f for f in xpt_files if f.endswith('SUPPDM.xpt')]
+                    
+                    if dm_files:
+                        z.extract(dm_files[0], temp_dir)
+                        full_path = os.path.join(temp_dir, dm_files[0])
+                        
+                        df = pd.read_sas(full_path, format='xport')
+                        
+                        # Convert bytes to strings
+                        for col in df.columns:
+                            if df[col].dtype == 'object':
+                                try:
+                                    df[col] = df[col].apply(lambda x: x.decode('utf-8') if isinstance(x, bytes) else x)
+                                except:
+                                    pass
+                        
+                        # Store basic age data
+                        for idx, row in df.iterrows():
+                            patient_id = row['USUBJID']
+                            age = row.get('AGE')
+                            
+                            age_diagnosis_data[patient_id] = {
+                                'current_age': age,
+                                'age_of_diagnosis': None,
+                                'years_since_diagnosis': None
+                            }
+                    
+                    # Check SUPPDM.xpt for supplemental demographics
+                    if suppdm_files:
+                        z.extract(suppdm_files[0], temp_dir)
+                        full_path = os.path.join(temp_dir, suppdm_files[0])
+                        
+                        df = pd.read_sas(full_path, format='xport')
+                        
+                        # Convert bytes to strings
+                        for col in df.columns:
+                            if df[col].dtype == 'object':
+                                try:
+                                    df[col] = df[col].apply(lambda x: x.decode('utf-8') if isinstance(x, bytes) else x)
+                                except:
+                                    pass
+                        
+                        # Look for diagnosis-related questions
+                        if 'QNAM' in df.columns and 'QVAL' in df.columns:
+                            # Extract diagnosis age if available
+                            for idx, row in df.iterrows():
+                                patient_id = row['USUBJID']
+                                question = row.get('QNAM', '')
+                                value = row.get('QVAL')
+                                
+                                if patient_id in age_diagnosis_data and pd.notna(value):
+                                    if 'DIAG' in str(question).upper() and 'AGE' in str(question).upper():
+                                        try:
+                                            age_diagnosis_data[patient_id]['age_of_diagnosis'] = float(value)
+                                        except:
+                                            pass
+                                    elif 'DURATION' in str(question).upper() or 'YEARS' in str(question).upper():
+                                        try:
+                                            age_diagnosis_data[patient_id]['years_since_diagnosis'] = float(value)
+                                        except:
+                                            pass
+        else:
+            with zipfile_deflate64.ZipFile(file_path, 'r') as zip_file:
+                xpt_files = [f for f in zip_file.namelist() if f.endswith('.xpt')]
+                
+                # Check DM.xpt for basic demographics
+                dm_files = [f for f in xpt_files if f.endswith('DM.xpt')]
+                suppdm_files = [f for f in xpt_files if f.endswith('SUPPDM.xpt')]
+                
+                if dm_files:
+                    with zip_file.open(dm_files[0]) as xpt_file:
+                        df = xport.to_dataframe(xpt_file)
+                    
+                    # Store basic age data
+                    for idx, row in df.iterrows():
+                        patient_id = row['USUBJID']
+                        age = row.get('AGE')
+                        
+                        age_diagnosis_data[patient_id] = {
+                            'current_age': age,
+                            'age_of_diagnosis': None,
+                            'years_since_diagnosis': None
+                        }
+                
+                # Check SUPPDM.xpt for supplemental demographics
+                if suppdm_files:
+                    with zip_file.open(suppdm_files[0]) as xpt_file:
+                        df = xport.to_dataframe(xpt_file)
+                    
+                    # Look for diagnosis-related questions
+                    if 'QNAM' in df.columns and 'QVAL' in df.columns:
+                        # Extract diagnosis age if available
+                        for idx, row in df.iterrows():
+                            patient_id = row['USUBJID']
+                            question = row.get('QNAM', '')
+                            value = row.get('QVAL')
+                            
+                            if patient_id in age_diagnosis_data and pd.notna(value):
+                                if 'DIAG' in str(question).upper() and 'AGE' in str(question).upper():
+                                    try:
+                                        age_diagnosis_data[patient_id]['age_of_diagnosis'] = float(value)
+                                    except:
+                                        pass
+                                elif 'DURATION' in str(question).upper() or 'YEARS' in str(question).upper():
+                                    try:
+                                        age_diagnosis_data[patient_id]['years_since_diagnosis'] = float(value)
+                                    except:
+                                        pass
+    
+    except Exception as e:
+        print(f"Error extracting age/diagnosis data: {e}")
+    
+    return age_diagnosis_data
+
+
+def create_patient_insulin_mapping(insulin_df, patient_ids, device_info):
+    """Create mapping of patients to their insulin types based on real data"""
+    
+    patient_insulin_map = {}
+    
+    # Group by patient
+    for usubjid, group in insulin_df.groupby('usubjid'):
+        patient_insulins = {
+            'bolus': None,
+            'basal': None,
+            'pump': None
+        }
+        
+        for _, row in group.iterrows():
+            insulin_type = row['insulin_type']
+            standardized_name = row['standardized_name']
+            
+            if insulin_type in patient_insulins:
+                patient_insulins[insulin_type] = standardized_name
+        
+        # Get delivery modality for this patient
+        patient_id = str(usubjid)
+        device = device_info.get(usubjid, '')
+        modality = categorize_insulin_delivery_modality(device)
+        
+        # Assign insulin types based on delivery modality and available data
+        if modality == 'MDI':
+            # MDI: use specific bolus and basal
+            bolus_insulin = patient_insulins['bolus']
+            basal_insulin = patient_insulins['basal']
+        elif modality in ['AID', 'SAP']:
+            # Pump users: use pump insulin or bolus for both
+            pump_insulin = patient_insulins['pump'] or patient_insulins['bolus']
+            bolus_insulin = pump_insulin
+            basal_insulin = pump_insulin
+        else:
+            bolus_insulin = None
+            basal_insulin = None
+            
+        patient_insulin_map[patient_id] = {
+            'bolus': bolus_insulin,
+            'basal': basal_insulin
+        }
+    
+    return patient_insulin_map
+
+
+def get_demographics_data(file_path, is_t1dexip=False):
+    """Get demographics data (age, race, ethnicity) from DM files"""
+    
+    demographics = {}
+    
+    try:
+        if is_t1dexip:
+            with zipfile.ZipFile(file_path, 'r') as z:
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    dm_files = [f for f in z.namelist() if f.endswith('DM.xpt')]
+                    
+                    if dm_files:
+                        dm_file = dm_files[0]
+                        z.extract(dm_file, temp_dir)
+                        full_path = os.path.join(temp_dir, dm_file)
+                        
+                        df = pd.read_sas(full_path, format='xport')
+                        
+                        # Convert bytes to strings
+                        for col in df.columns:
+                            if df[col].dtype == 'object':
+                                try:
+                                    df[col] = df[col].apply(lambda x: x.decode('utf-8') if isinstance(x, bytes) else x)
+                                except:
+                                    pass
+                        
+                        for idx, row in df.iterrows():
+                            patient_id = row['USUBJID']
+                            demographics[patient_id] = {
+                                'age': row.get('AGE'),
+                                'race': row.get('RACE'),
+                                'ethnic': row.get('ETHNIC')
+                            }
+        else:
+            with zipfile_deflate64.ZipFile(file_path, 'r') as zip_file:
+                dm_files = [f for f in zip_file.namelist() if f.endswith('DM.xpt')]
+                
+                if dm_files:
+                    dm_file = dm_files[0]
+                    
+                    with zip_file.open(dm_file) as xpt_file:
+                        df = xport.to_dataframe(xpt_file)
+                    
+                    for idx, row in df.iterrows():
+                        patient_id = row['USUBJID']
+                        demographics[patient_id] = {
+                            'age': row.get('AGE'),
+                            'race': row.get('RACE'),
+                            'ethnic': row.get('ETHNIC')
+                        }
+    
+    except Exception as e:
+        print(f"Error getting demographics data: {e}")
+    
+    return demographics
+
+
+def get_insulin_delivery_devices(file_path):
+    """Get insulin delivery device information from DX files"""
+    
+    device_info = {}
+    
+    try:
+        df_device = get_df_from_zip_deflate_64(file_path, 'DX.xpt')
+        
+        for idx, row in df_device.iterrows():
+            patient_id = row['USUBJID']
+            device_info[patient_id] = row.get('DXTRT', '')
+    
+    except Exception as e:
+        print(f"Error getting device information: {e}")
+    
+    return device_info
+
+
+# ======= MAIN PROCESSING FUNCTIONS =======
 
 def get_valid_subject_ids(file_path):
     df_device = get_df_from_zip_deflate_64(file_path, 'DX.xpt')
