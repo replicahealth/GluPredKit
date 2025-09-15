@@ -62,9 +62,10 @@ class Parser(BaseParser):
                 invalid_intervals = time_diffs[time_diffs != expected_interval]
                 print(f"invalid time intervals found:", invalid_intervals)
 
-            age, gender = get_age_and_gender(file_path, prefix, subject_id)
+            age, gender, age_of_diagnosis = get_age_and_diagnosis(file_path, prefix, subject_id)
             merged_df['age'] = age
             merged_df['gender'] = gender
+            merged_df['age_of_diagnosis'] = age_of_diagnosis
             merged_df['id'] = subject_id
 
             #print(merged_df)
@@ -309,14 +310,15 @@ def get_dfs_and_ids(file_path, id_prefix):
     return dfs_dict
 
 
-def get_age_and_gender(file_path, prefix, subject_id):
+def get_age_and_diagnosis(file_path, prefix, subject_id):
     folder = f'Tidepool-JDRF-{prefix}-test'
     file_name = f'{prefix}-test-metadata-summary.csv'
     full_subject_id = f'test_{subject_id.split("-")[1]}.csv'
     file_path = os.path.join(file_path, folder, file_name)
     metadata_df = pd.read_csv(file_path)
     subject_data = metadata_df[metadata_df['file_name'] == full_subject_id]
-    # Future work to add exact age at exact time
+    
+    # Extract age and gender
     age = subject_data['ageStart'].iloc[0]
     gender = subject_data['biologicalSex'].iloc[0]
     gender_map = {
@@ -325,6 +327,15 @@ def get_age_and_gender(file_path, prefix, subject_id):
     }
     if pd.notna(gender):
         gender = gender_map[gender.lower()]
-    return age, gender
+    
+    # Calculate age_of_diagnosis from ageStart - yearsLivingWithDiabetesStart
+    age_of_diagnosis = None
+    if 'yearsLivingWithDiabetesStart' in subject_data.columns:
+        years_living_with_diabetes = subject_data['yearsLivingWithDiabetesStart'].iloc[0]
+        if pd.notna(age) and pd.notna(years_living_with_diabetes):
+            age_of_diagnosis = age - years_living_with_diabetes
+            age_of_diagnosis = max(0, age_of_diagnosis)  # Ensure non-negative
+    
+    return age, gender, age_of_diagnosis
 
 
