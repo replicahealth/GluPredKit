@@ -159,7 +159,9 @@ class Parser(BaseParser):
 
 def get_valid_subject_ids(file_path):
     df_device = get_df_from_zip_deflate_64(file_path, 'DX.xpt')
-    subject_ids_not_on_mdi = df_device[df_device['DXTRT'] != 'MULTIPLE DAILY INJECTIONS']['USUBJID'].unique()
+    #subject_ids_not_on_mdi = df_device[df_device['DXTRT'] != 'MULTIPLE DAILY INJECTIONS']['USUBJID'].unique()
+    print("ALL SUBJECTS ARE INCLUDED")
+    subject_ids_not_on_mdi = df_device['USUBJID'].unique()
     return subject_ids_not_on_mdi
 
 
