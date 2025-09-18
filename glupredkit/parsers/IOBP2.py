@@ -1,6 +1,6 @@
 """
-The IOBP2 parser is processing the data from the IOBP2 dataset and returning the data merged into
-the same time grid in a dataframe.
+The IOBP2 parser processes data from the IOBP2 dataset, filtering for BP and BPFiasp treatment groups only,
+and returns the data merged into the same time grid in a dataframe.
 """
 try:
     from .base_parser import BaseParser
@@ -25,7 +25,7 @@ class Parser(BaseParser):
         """
         file_path -- the file path to the folder containing "IOBP2 RCT Public Dataset" folder.
         """
-        print(f"Processing IOBP2 data from {file_path}")
+        print(f"Processing IOBP2 data (BP/BPFiasp treatment groups only) from {file_path}")
         
         # Construct path to the CGM data file
         cgm_data_path = os.path.join(file_path, "IOBP2 RCT Public Dataset", "Data Tables", "IOBP2DeviceiLet.txt")
@@ -45,6 +45,16 @@ class Parser(BaseParser):
             return pd.DataFrame()
         
         print(f"Loaded CGM data: {df_glucose.shape[0]} records for {df_glucose['id'].nunique()} subjects")
+
+        # Filter for BP and BPFiasp treatment groups only
+        print("Filtering for BP and BPFiasp treatment groups...")
+        df_glucose = self.filter_bp_subjects(df_glucose, file_path)
+        
+        if df_glucose.empty:
+            print("No subjects found in BP or BPFiasp treatment groups")
+            return pd.DataFrame()
+        
+        print(f"After BP/BPFiasp filtering: {df_glucose.shape[0]} records for {df_glucose['id'].nunique()} subjects")
 
         # Process bolus data
         print(f"Loading bolus data from: {cgm_data_path}")
@@ -91,11 +101,15 @@ class Parser(BaseParser):
         
         print(f"Loaded metadata: {df_metadata.shape[0] if not df_metadata.empty else 0} subjects")
 
-        # For now, process other data types as empty (to be implemented later)
-        _, df_meals, _, _, df_exercise = self.get_dataframes(file_path)
+        # Process insulin type data
+        insulin_data_path = os.path.join(file_path, "IOBP2 RCT Public Dataset", "Data Tables", "IOBP2Insulin.txt")
+        print(f"Loading insulin data from: {insulin_data_path}")
+        df_insulin = self.load_insulin_data(insulin_data_path, df_glucose)
+        
+        print(f"Loaded insulin data: {df_insulin.shape[0] if not df_insulin.empty else 0} subjects")
 
         # Resample and merge data
-        df_resampled = self.resample_data(df_glucose, df_meals, df_bolus, df_basal, df_exercise, df_meal_labels, df_age, df_gender, df_height_weight, df_metadata)
+        df_resampled = self.resample_data(df_glucose, df_bolus, df_basal, df_meal_labels, df_age, df_gender, df_height_weight, df_metadata, df_insulin)
         
         return df_resampled
 
@@ -104,30 +118,11 @@ class Parser(BaseParser):
         Load and process CGM data from IOBP2DeviceiLet.txt file.
         """
         try:
-            # First try to detect the delimiter by reading a few lines
-            with open(cgm_data_path, 'r') as f:
-                first_line = f.readline().strip()
-                print(f"First line: {first_line[:200]}...")
-                
-            # Check if it's pipe-delimited based on the column names we can see
-            if '|' in first_line:
-                print("Detected pipe-delimited format")
-                print("Loading large dataset (this may take a moment)...")
-                df = pd.read_csv(cgm_data_path, delimiter='|', low_memory=False)
-            else:
-                print("Using tab-delimited format")
-                df = pd.read_csv(cgm_data_path, delimiter='\t', low_memory=False)
-            
+            df = pd.read_csv(cgm_data_path, delimiter='|', low_memory=False)
+
             print(f"Raw CGM data shape: {df.shape}")
             print(f"Columns: {list(df.columns)}")
-            
-            # Check for required columns (adjust based on actual file structure)
-            required_cols = ['Subject', 'DateTime']  # These might be different in actual file
-            
-            # Show first few rows to understand structure
-            print("First 5 rows of CGM data:")
-            print(df.head())
-            
+
             # Process subject ID based on IOBP2 structure
             if 'PtID' in df.columns:
                 df['id'] = 'IOBP2-' + df['PtID'].astype(str)
@@ -139,7 +134,6 @@ class Parser(BaseParser):
             # Process datetime using DeviceDtTm column
             if 'DeviceDtTm' in df.columns:
                 print(f"Using datetime column: DeviceDtTm")
-                print(f"Sample datetime values: {df['DeviceDtTm'].head()}")
                 try:
                     # Optimize datetime parsing by specifying format (based on sample: 8/14/2020 12:01:23 AM)
                     print("Parsing datetime (this may take a moment for large datasets)...")
@@ -169,7 +163,6 @@ class Parser(BaseParser):
             if 'CGMVal' in df.columns:
                 print(f"Using glucose column: CGMVal")
                 df['CGM'] = pd.to_numeric(df['CGMVal'], errors='coerce')
-                print(f"Sample CGM values: {df['CGM'].head()}")
             else:
                 print("Warning: Could not find CGMVal column")
                 # Show available columns to help with debugging
@@ -184,7 +177,6 @@ class Parser(BaseParser):
             
             print(f"Processed CGM data: {df_processed.shape[0]} valid glucose readings")
             print(f"Glucose range: {df_processed['CGM'].min():.1f} - {df_processed['CGM'].max():.1f} mg/dL")
-            print(f"Subjects: {sorted(df_processed['id'].unique())}")
 
             return df_processed
             
@@ -192,30 +184,52 @@ class Parser(BaseParser):
             print(f"Error loading CGM data: {e}")
             return pd.DataFrame()
 
+    def filter_bp_subjects(self, df_glucose, file_path):
+        """
+        Filter subjects to include only those in BP and BPFiasp treatment groups.
+        """
+        try:
+            # Load roster data to get treatment groups
+            roster_path = os.path.join(file_path, "IOBP2 RCT Public Dataset", "Data Tables", "IOBP2PtRoster.txt")
+            
+            if not os.path.exists(roster_path):
+                print(f"Warning: Roster file not found at: {roster_path}")
+                return df_glucose  # Return unchanged if no roster data
+            
+            roster = pd.read_csv(roster_path, delimiter='|', low_memory=False)
+            
+            # Filter roster for BP and BPFiasp treatment groups
+            bp_roster = roster[roster['TrtGroup'].isin(['BP', 'BPFiasp'])].copy()
+            
+            if bp_roster.empty:
+                print("No subjects found in BP or BPFiasp treatment groups in roster")
+                return pd.DataFrame()
+            
+            # Create subject IDs to match
+            bp_roster['id'] = 'IOBP2-' + bp_roster['PtID'].astype(str)
+            bp_subject_ids = set(bp_roster['id'].unique())
+            
+            print(f"Found {len(bp_subject_ids)} subjects in BP/BPFiasp groups")
+            print(f"Treatment group distribution: {bp_roster['TrtGroup'].value_counts().to_dict()}")
+            
+            # Filter glucose data for BP subjects only
+            df_glucose_filtered = df_glucose[df_glucose['id'].isin(bp_subject_ids)].copy()
+            
+            return df_glucose_filtered
+            
+        except Exception as e:
+            print(f"Error filtering BP subjects: {e}")
+            return df_glucose  # Return unchanged on error
+
     def load_bolus_data(self, cgm_data_path):
         """
         Load and process bolus data from IOBP2DeviceiLet.txt file.
         """
         try:
-            # First try to detect the delimiter by reading a few lines
-            with open(cgm_data_path, 'r') as f:
-                first_line = f.readline().strip()
-                
-            # Check if it's pipe-delimited based on the column names we can see
-            if '|' in first_line:
-                print("Detected pipe-delimited format for bolus data")
-                print("Loading large dataset for bolus processing (this may take a moment)...")
-                df = pd.read_csv(cgm_data_path, delimiter='|', low_memory=False)
-            else:
-                print("Using tab-delimited format for bolus data")
-                df = pd.read_csv(cgm_data_path, delimiter='\t', low_memory=False)
-            
+            df = pd.read_csv(cgm_data_path, delimiter='|', low_memory=False)
+
             print(f"Raw data shape for bolus processing: {df.shape}")
-            
-            # Show first few rows to understand structure
-            print("First 3 rows of bolus data:")
-            print(df.head(3))
-            
+
             # Process subject ID based on IOBP2 structure
             if 'PtID' in df.columns:
                 df['id'] = 'IOBP2-' + df['PtID'].astype(str)
@@ -264,7 +278,6 @@ class Parser(BaseParser):
                 # Sum both bolus columns
                 df['bolus'] = df['BolusDelivPrev'] + df['MealBolusDelivPrev']
                 
-                print(f"Sample bolus values: {df[['BolusDelivPrev', 'MealBolusDelivPrev', 'bolus']].head()}")
                 print(f"Total non-zero bolus records: {(df['bolus'] > 0).sum()}")
                 
                 bolus_total = (df['bolus'] > 0).sum()
@@ -284,7 +297,6 @@ class Parser(BaseParser):
             
             print(f"Processed bolus data: {df_processed.shape[0]} total records")
             print(f"Total bolus records: {bolus_total}")
-            print(f"Subjects: {sorted(df_processed['id'].unique())}")
 
             return df_processed
             
@@ -297,25 +309,10 @@ class Parser(BaseParser):
         Load and process basal data from IOBP2DeviceiLet.txt file.
         """
         try:
-            # First try to detect the delimiter by reading a few lines
-            with open(cgm_data_path, 'r') as f:
-                first_line = f.readline().strip()
-                
-            # Check if it's pipe-delimited based on the column names we can see
-            if '|' in first_line:
-                print("Detected pipe-delimited format for basal data")
-                print("Loading large dataset for basal processing (this may take a moment)...")
-                df = pd.read_csv(cgm_data_path, delimiter='|', low_memory=False)
-            else:
-                print("Using tab-delimited format for basal data")
-                df = pd.read_csv(cgm_data_path, delimiter='\t', low_memory=False)
-            
+            df = pd.read_csv(cgm_data_path, delimiter='|', low_memory=False)
+
             print(f"Raw data shape for basal processing: {df.shape}")
-            
-            # Show first few rows to understand structure
-            print("First 3 rows of basal data:")
-            print(df.head(3))
-            
+
             # Process subject ID based on IOBP2 structure
             if 'PtID' in df.columns:
                 df['id'] = 'IOBP2-' + df['PtID'].astype(str)
@@ -376,7 +373,6 @@ class Parser(BaseParser):
             
             print(f"Processed basal data: {df_processed.shape[0]} total records")
             print(f"Total basal records: {basal_total}")
-            print(f"Subjects: {sorted(df_processed['id'].unique())}")
 
             return df_processed
             
@@ -389,25 +385,10 @@ class Parser(BaseParser):
         Load and process meal label data from IOBP2DeviceiLet.txt file.
         """
         try:
-            # First try to detect the delimiter by reading a few lines
-            with open(cgm_data_path, 'r') as f:
-                first_line = f.readline().strip()
-                
-            # Check if it's pipe-delimited based on the column names we can see
-            if '|' in first_line:
-                print("Detected pipe-delimited format for meal label data")
-                print("Loading large dataset for meal label processing (this may take a moment)...")
-                df = pd.read_csv(cgm_data_path, delimiter='|', low_memory=False)
-            else:
-                print("Using tab-delimited format for meal label data")
-                df = pd.read_csv(cgm_data_path, delimiter='\t', low_memory=False)
-            
+            df = pd.read_csv(cgm_data_path, delimiter='|', low_memory=False)
+
             print(f"Raw data shape for meal label processing: {df.shape}")
-            
-            # Show first few rows to understand structure
-            print("First 3 rows of meal label data:")
-            print(df.head(3))
-            
+
             # Process subject ID based on IOBP2 structure
             if 'PtID' in df.columns:
                 df['id'] = 'IOBP2-' + df['PtID'].astype(str)
@@ -469,7 +450,6 @@ class Parser(BaseParser):
             
             print(f"Processed meal label data: {df_processed.shape[0]} total records")
             print(f"Total meal events: {meal_total}")
-            print(f"Subjects: {sorted(df_processed['id'].unique())}")
 
             return df_processed
             
@@ -524,7 +504,6 @@ class Parser(BaseParser):
             df_processed = df_processed[df_processed['age'].notna()]
             
             print(f"Processed age data: {df_processed.shape[0]} subjects with valid age")
-            print(f"Subjects: {sorted(df_processed['id'].unique())}")
 
             return df_processed
             
@@ -548,11 +527,7 @@ class Parser(BaseParser):
             
             print(f"Raw gender data shape: {df.shape}")
             print(f"Columns: {list(df.columns)}")
-            
-            # Show first few rows to understand structure
-            print("First 5 rows of gender data:")
-            print(df.head())
-            
+
             # Process subject ID to match other data
             if 'PtID' in df.columns:
                 df['id'] = 'IOBP2-' + df['PtID'].astype(str)
@@ -582,7 +557,6 @@ class Parser(BaseParser):
             df_processed = df_processed[df_processed['gender'].notna()]
             
             print(f"Processed gender data: {df_processed.shape[0]} subjects with valid gender")
-            print(f"Subjects: {sorted(df_processed['id'].unique())}")
 
             return df_processed
             
@@ -607,11 +581,7 @@ class Parser(BaseParser):
             
             print(f"Raw height/weight data shape: {df.shape}")
             print(f"Columns: {list(df.columns)}")
-            
-            # Show first few rows to understand structure
-            print("First 5 rows of height/weight data:")
-            print(df.head())
-            
+
             # Process subject ID to match other data
             if 'PtID' in df.columns:
                 df['id'] = 'IOBP2-' + df['PtID'].astype(str)
@@ -694,7 +664,6 @@ class Parser(BaseParser):
             df_processed.set_index('date', inplace=True)
             
             print(f"Total processed height/weight records: {len(df_processed)}")
-            print(f"Subjects with height/weight data: {sorted(df_processed['id'].unique())}")
 
             return df_processed
             
@@ -705,8 +674,7 @@ class Parser(BaseParser):
     def load_metadata(self, file_path):
         """
         Load and process metadata from IOBP2 roster and screening files.
-        Extracts insulin_delivery_device, insulin_delivery_algorithm, insulin_delivery_modality,
-        cgm_device, ethnicity, age_of_diagnosis, is_pregnant following process_iobp2_data.py pattern.
+        SIMPLIFIED FOR BP/BPFiasp SUBJECTS ONLY - all use Beta Bionics Gen 4 iLet with Bionic Pancreas algorithm.
         """
         try:
             # Construct paths to roster and screening files
@@ -721,18 +689,26 @@ class Parser(BaseParser):
                 print(f"Warning: Screening file not found at: {screening_path}")
                 return pd.DataFrame()
             
-            print("Loading roster and screening data for metadata...")
+            print("Loading roster and screening data for BP/BPFiasp metadata...")
             
             # Load roster and screening data
             roster = pd.read_csv(roster_path, delimiter='|', low_memory=False)
             screening = pd.read_csv(screening_path, delimiter='|', low_memory=False)
             
-            print(f"Roster shape: {roster.shape}")
+            # Filter roster for BP and BPFiasp treatment groups only
+            roster = roster[roster['TrtGroup'].isin(['BP', 'BPFiasp'])].copy()
+            
+            if roster.empty:
+                print("No subjects found in BP or BPFiasp treatment groups")
+                return pd.DataFrame()
+            
+            print(f"BP/BPFiasp roster shape: {roster.shape}")
             print(f"Screening shape: {screening.shape}")
+            print(f"Treatment group distribution: {roster['TrtGroup'].value_counts().to_dict()}")
             
             # Merge roster with screening data
             merged_data = roster.merge(screening, on='PtID', how='inner')
-            print(f"Merged data shape: {merged_data.shape}")
+            print(f"Merged BP/BPFiasp data shape: {merged_data.shape}")
             
             # Process subject ID to match other data
             merged_data['id'] = 'IOBP2-' + merged_data['PtID'].astype(str)
@@ -741,77 +717,10 @@ class Parser(BaseParser):
             df_metadata = pd.DataFrame()
             df_metadata['id'] = merged_data['id']
             
-            # insulin_delivery_algorithm - Map based on treatment group and device
-            def map_insulin_delivery_algorithm(trt_group, device, is_mdi):
-                if trt_group in ['BP', 'BPFiasp']:
-                    return 'Bionic Pancreas'
-                else:
-                    if 'Control:IQ' in str(device):
-                        return 'Control:IQ'
-                    elif 'Basal:IQ' in str(device):
-                        return 'Basal:IQ'
-                    elif '630G' in str(device):
-                        return 'SmartGuard'
-                    elif '670G' in str(device):
-                        return 'SmartGuard'
-                    elif '530G' in str(device):
-                        return 'Low-Glucose Suspend'
-                    elif 'Other' in str(device):
-                        return np.nan
-                    elif pd.isna(device):
-                        if is_mdi == 1:
-                            return 'Multiple Daily Injections'
-                        else:
-                            return np.nan
-                    else:
-                        return 'basal-bolus'
-            
-            df_metadata['insulin_delivery_algorithm'] = merged_data.apply(
-                lambda x: map_insulin_delivery_algorithm(x['TrtGroup'], x['PumpType'], x['InsModInjections']), axis=1
-            )
-            
-            # insulin_delivery_device - Map pump types  
-            def map_insulin_delivery_device(trt_group, pump_type, is_mdi):
-                if trt_group in ['BP', 'BPFiasp']:
-                    return 'Beta Bionics Gen 4 iLet'
-                
-                if pd.isna(pump_type):
-                    if is_mdi == 1:
-                        return 'Insulin Pen'
-                    else:
-                        return np.nan
-                
-                pump_str = str(pump_type).strip()
-                
-                if 'OmniPod' in pump_str:
-                    return 'OmniPod'
-                elif 'Other' in pump_str:
-                    return np.nan
-                elif 'Tandem' in pump_str:
-                    return 't:slim X2'
-                elif 'Medtronic' in pump_str:
-                    return pump_str.replace('Medtronic', 'MiniMed')
-                else:
-                    return pump_str
-            
-            df_metadata['insulin_delivery_device'] = merged_data.apply(
-                lambda x: map_insulin_delivery_device(x['TrtGroup'], x['PumpType'], x['InsModInjections']), axis=1
-            )
-            
-            # insulin_delivery_modality - Based on algorithm
-            def map_insulin_delivery_modality(algorithm):
-                if algorithm == 'Bionic Pancreas':
-                    return 'AID'  # Automated Insulin Delivery
-                elif algorithm in ['Multiple Daily Injections']:
-                    return 'MDI'
-                elif algorithm in ['basal-bolus']:
-                    return 'SAP'
-                else:
-                    return 'AID'
-            
-            df_metadata['insulin_delivery_modality'] = df_metadata['insulin_delivery_algorithm'].apply(map_insulin_delivery_modality)
-            
-            # cgm_device - All IOBP2 participants used Dexcom G6
+            # SIMPLIFIED: All BP/BPFiasp subjects use Beta Bionics with Bionic Pancreas algorithm
+            df_metadata['insulin_delivery_device'] = 'Beta Bionics Gen 4 iLet'
+            df_metadata['insulin_delivery_algorithm'] = 'iLet Bionic Pancreas'
+            df_metadata['insulin_delivery_modality'] = 'AID'  # Automated Insulin Delivery
             df_metadata['cgm_device'] = 'Dexcom G6'
             
             # ethnicity - Combine ethnicity and race
@@ -848,14 +757,12 @@ class Parser(BaseParser):
             # Remove any rows with missing subject ID
             df_metadata = df_metadata[df_metadata['id'].notna()]
             
-            print(f"Processed metadata for {len(df_metadata)} subjects")
+            print(f"Processed metadata for {len(df_metadata)} BP/BPFiasp subjects")
             print(f"Subjects: {sorted(df_metadata['id'].unique())}")
             
-            # Show distributions
+            # Show distributions (simplified since all BP subjects have same device/algorithm)
             print("Metadata distributions:")
-            print(f"  Insulin delivery algorithms: {df_metadata['insulin_delivery_algorithm'].value_counts(dropna=False).head().to_dict()}")
-            print(f"  Insulin delivery devices: {df_metadata['insulin_delivery_device'].value_counts(dropna=False).head().to_dict()}")
-            print(f"  Insulin delivery modalities: {df_metadata['insulin_delivery_modality'].value_counts(dropna=False).to_dict()}")
+            print(f"  All subjects use: {df_metadata['insulin_delivery_device'].iloc[0]} with {df_metadata['insulin_delivery_algorithm'].iloc[0]}")
             print(f"  Ethnicity: {df_metadata['ethnicity'].value_counts(dropna=False).head().to_dict()}")
             
             return df_metadata
@@ -864,7 +771,228 @@ class Parser(BaseParser):
             print(f"Error loading metadata: {e}")
             return pd.DataFrame()
 
-    def resample_data(self, df_glucose, df_meals, df_bolus, df_basal, df_exercise, df_meal_labels=None, df_age=None, df_gender=None, df_height_weight=None, df_metadata=None):
+    def load_insulin_data(self, insulin_data_path, df_glucose):
+        """
+        Load and process insulin data from IOBP2Insulin.txt file.
+        For BP/BPFiasp subjects: BPFiasp subjects get "Fiasp" for both bolus and basal,
+        BP subjects use time overlap logic to select best insulin matches with CGM data.
+        """
+        try:
+            # Get treatment group information for each subject
+            roster_path = os.path.join(os.path.dirname(insulin_data_path), "IOBP2PtRoster.txt")
+            treatment_groups = {}
+            
+            if os.path.exists(roster_path):
+                roster = pd.read_csv(roster_path, delimiter='|', low_memory=False)
+                roster = roster[roster['TrtGroup'].isin(['BP', 'BPFiasp'])].copy()
+                roster['id'] = 'IOBP2-' + roster['PtID'].astype(str)
+                treatment_groups = dict(zip(roster['id'], roster['TrtGroup']))
+                print(f"Treatment groups loaded: {len(treatment_groups)} subjects")
+                print(f"TrtGroup distribution: {roster['TrtGroup'].value_counts().to_dict()}")
+            else:
+                print(f"Warning: Roster file not found at: {roster_path}")
+                return pd.DataFrame()
+            
+            # Check if insulin data file exists
+            if not os.path.exists(insulin_data_path):
+                print(f"Warning: Insulin data file not found at: {insulin_data_path}")
+                return pd.DataFrame()
+            
+            print("Loading insulin data for BP/BPFiasp subjects...")
+            
+            # Get all subject IDs from CGM data
+            all_subject_ids = df_glucose['id'].unique() if not df_glucose.empty else []
+            print(f"Iterating through insulin type for all {len(all_subject_ids)} subjects")
+            
+            insulin_assignments = []
+            
+            for subject_id in all_subject_ids:
+                trt_group = treatment_groups.get(subject_id, 'Unknown')
+                
+                if trt_group == 'BPFiasp':
+                    # BPFiasp subjects: Set both bolus and basal to "Fiasp"
+                    insulin_assignments.append({
+                        'id': subject_id,
+                        'insulin_type_bolus': 'Fiasp',
+                        'insulin_type_basal': 'Fiasp'
+                    })
+                    
+                elif trt_group == 'BP':
+                    # BP subjects: Use time overlap logic with insulin data
+                    best_insulin, _ = self.get_best_insulin_for_subject(
+                        subject_id, insulin_data_path, df_glucose
+                    )
+                    
+                    insulin_assignments.append({
+                        'id': subject_id,
+                        'insulin_type_bolus': best_insulin if best_insulin else np.nan,
+                        'insulin_type_basal': best_insulin if best_insulin else np.nan
+                    })
+                    
+                else:
+                    print(f"Warning: Unknown treatment group for subject {subject_id}: {trt_group}")
+            
+            if not insulin_assignments:
+                print("No valid insulin assignments found")
+                return pd.DataFrame()
+            
+            # Create result dataframe
+            df_insulin_result = pd.DataFrame(insulin_assignments)
+            
+            print(f"Processed insulin data for {len(df_insulin_result)} subjects")
+            
+            # Show distributions by treatment group
+            bp_subjects = [aid for aid in df_insulin_result['id'] if treatment_groups.get(aid) == 'BP']
+            bpfiasp_subjects = [aid for aid in df_insulin_result['id'] if treatment_groups.get(aid) == 'BPFiasp']
+            
+            print(f"BP subjects ({len(bp_subjects)}): insulin types from data analysis")
+            print(f"BPFiasp subjects ({len(bpfiasp_subjects)}): all set to 'Fiasp'")
+            
+            # Show overall distributions
+            print("Insulin type distributions:")
+            print(f"  Bolus insulins: {df_insulin_result['insulin_type_bolus'].value_counts().head().to_dict()}")
+            print(f"  Basal insulins: {df_insulin_result['insulin_type_basal'].value_counts().head().to_dict()}")
+            
+            return df_insulin_result
+            
+        except Exception as e:
+            print(f"Error loading insulin data: {e}")
+            return pd.DataFrame()
+
+    def get_best_insulin_for_subject(self, subject_id, insulin_data_path, df_glucose):
+        """
+        Helper method to determine insulin type for a BP subject.
+        Determines whether subject used Lispro or Aspart and sets same for both bolus and basal.
+        """
+        try:
+            # Load insulin data
+            df_insulin = pd.read_csv(insulin_data_path, delimiter='|', low_memory=False)
+            
+            # Extract subject ID from IOBP2 format
+            actual_subject_id = subject_id.replace('IOBP2-', '')
+            
+            # Filter for this subject
+            subject_insulin = df_insulin[df_insulin['PtID'].astype(str) == actual_subject_id].copy()
+            
+            if subject_insulin.empty:
+                print(f"No insulin data found for subject {subject_id}")
+                return None, None
+            
+            # Filter on InsRoute = "Pump"
+            pump_insulin = subject_insulin[subject_insulin['InsRoute'] == 'Pump'].copy()
+            
+            if pump_insulin.empty:
+                print(f"No pump insulin data found for subject {subject_id}")
+                return None, None
+            
+            # Search for Aspart/Lispro samples
+            aspart_rows = pump_insulin[pump_insulin['InsulinName'].str.lower().str.contains('aspart|novolog', case=False, na=False)]
+            lispro_rows = pump_insulin[pump_insulin['InsulinName'].str.lower().str.contains('lispro|humalog', case=False, na=False)]
+            
+            has_aspart = not aspart_rows.empty
+            has_lispro = not lispro_rows.empty
+            
+            # Log if both alternatives are available
+            if has_aspart and has_lispro:
+                print(f"Subject {subject_id}: Has both Aspart and Lispro options available")
+            
+            # Determine which insulin to use
+            if has_aspart and has_lispro:
+                # Both available - prioritize based on criteria
+                chosen_insulin = self._prioritize_insulin(subject_id, aspart_rows, lispro_rows)
+            elif has_aspart:
+                # Only Aspart available
+                chosen_insulin = 'Novolog (Aspart)'
+                print(f"Subject {subject_id}: Only Aspart available, using Novolog (Aspart)")
+            elif has_lispro:
+                # Only Lispro available
+                chosen_insulin = 'Humalog (Lispro)'
+                print(f"Subject {subject_id}: Only Lispro available, using Humalog (Lispro)")
+            else:
+                print(f"Warning: No Aspart or Lispro insulin found for BP subject {subject_id}")
+                return None, None
+            
+            print(f"Subject {subject_id}: Assigned insulin type '{chosen_insulin}' for both bolus and basal")
+            
+            # Return the same insulin for both bolus and basal
+            return chosen_insulin, chosen_insulin
+            
+        except Exception as e:
+            print(f"Error processing insulin data for subject {subject_id}: {e}")
+            return None, None
+    
+    def _prioritize_insulin(self, subject_id, aspart_rows, lispro_rows):
+        """
+        Helper method to prioritize between Aspart and Lispro when both are available.
+        Priority: "Started after enrollment" > valid start/end dates > first available
+        """
+        try:
+            # Check for "Started after enrollment" filter
+            aspart_enrolled = aspart_rows[aspart_rows['InsTypeStart'] == 'Started after enrollment']
+            lispro_enrolled = lispro_rows[lispro_rows['InsTypeStart'] == 'Started after enrollment']
+            
+            # Check for valid start and end dates
+            aspart_valid_dates = aspart_rows[
+                aspart_rows['InsTypeStartDt'].notna() & 
+                aspart_rows['InsTypeStopDt'].notna()
+            ]
+            lispro_valid_dates = lispro_rows[
+                lispro_rows['InsTypeStartDt'].notna() & 
+                lispro_rows['InsTypeStopDt'].notna()
+            ]
+            
+            # Priority 1: "Started after enrollment" AND valid dates
+            aspart_priority1 = aspart_enrolled[
+                aspart_enrolled['InsTypeStartDt'].notna() & 
+                aspart_enrolled['InsTypeStopDt'].notna()
+            ]
+            lispro_priority1 = lispro_enrolled[
+                lispro_enrolled['InsTypeStartDt'].notna() & 
+                lispro_enrolled['InsTypeStopDt'].notna()
+            ]
+            
+            if not aspart_priority1.empty and not lispro_priority1.empty:
+                # Both have highest priority - choose Aspart arbitrarily
+                print(f"Subject {subject_id}: Both insulins have 'Started after enrollment' + valid dates, choosing Aspart")
+                return 'Novolog (Aspart)'
+            elif not aspart_priority1.empty:
+                print(f"Subject {subject_id}: Aspart has 'Started after enrollment' + valid dates")
+                return 'Novolog (Aspart)'
+            elif not lispro_priority1.empty:
+                print(f"Subject {subject_id}: Lispro has 'Started after enrollment' + valid dates")
+                return 'Humalog (Lispro)'
+            
+            # Priority 2: "Started after enrollment" only
+            if not aspart_enrolled.empty and not lispro_enrolled.empty:
+                print(f"Subject {subject_id}: Both insulins have 'Started after enrollment', choosing Aspart")
+                return 'Novolog (Aspart)'
+            elif not aspart_enrolled.empty:
+                print(f"Subject {subject_id}: Aspart has 'Started after enrollment'")
+                return 'Novolog (Aspart)'
+            elif not lispro_enrolled.empty:
+                print(f"Subject {subject_id}: Lispro has 'Started after enrollment'")
+                return 'Humalog (Lispro)'
+            
+            # Priority 3: Valid dates only
+            if not aspart_valid_dates.empty and not lispro_valid_dates.empty:
+                print(f"Subject {subject_id}: Both insulins have valid dates, choosing Aspart")
+                return 'Novolog (Aspart)'
+            elif not aspart_valid_dates.empty:
+                print(f"Subject {subject_id}: Aspart has valid dates")
+                return 'Novolog (Aspart)'
+            elif not lispro_valid_dates.empty:
+                print(f"Subject {subject_id}: Lispro has valid dates")
+                return 'Humalog (Lispro)'
+            
+            # Default: Choose Aspart arbitrarily
+            print(f"Subject {subject_id}: Neither insulin meets priority criteria, choosing Aspart by default")
+            return 'Novolog (Aspart)'
+            
+        except Exception as e:
+            print(f"Error prioritizing insulin for subject {subject_id}: {e}")
+            return 'Novolog (Aspart)'  # Default fallback
+
+    def resample_data(self, df_glucose, df_bolus, df_basal, df_meal_labels=None, df_age=None, df_gender=None, df_height_weight=None, df_metadata=None, df_insulin=None):
         """
         Resample and merge all dataframes into a unified time grid.
         """
@@ -961,7 +1089,7 @@ class Parser(BaseParser):
                     ).sum()
                     
                     # Convert back to text labels
-                    df_subject_meal_labels['meal_in_window'] = np.nan
+                    df_subject_meal_labels['meal_in_window'] = None
                     df_subject_meal_labels.loc[df_subject_meal_labels['meal_sum'] > 0, 'meal_in_window'] = 'Meal'
                     
                     # Resample meal labels to 5-minute intervals, using last value
@@ -1070,6 +1198,21 @@ class Parser(BaseParser):
                 df_subject['age_of_diagnosis'] = np.nan
                 df_subject['is_pregnant'] = np.nan
             
+            # Add insulin type data for this subject if available (block sparse - constant per subject)
+            if df_insulin is not None and not df_insulin.empty:
+                subject_insulin = df_insulin[df_insulin['id'] == subject_id]
+                if not subject_insulin.empty:
+                    # Insulin types are constant for the subject, so use the first (and only) values
+                    insulin_row = subject_insulin.iloc[0]
+                    df_subject['insulin_type_bolus'] = insulin_row['insulin_type_bolus']
+                    df_subject['insulin_type_basal'] = insulin_row['insulin_type_basal']
+                else:
+                    df_subject['insulin_type_bolus'] = np.nan
+                    df_subject['insulin_type_basal'] = np.nan
+            else:
+                df_subject['insulin_type_bolus'] = np.nan
+                df_subject['insulin_type_basal'] = np.nan
+            
             # For now, add empty columns for other data types (to be implemented)
             df_subject['carbs'] = np.nan
             df_subject['workout_label'] = np.nan
@@ -1106,19 +1249,22 @@ class Parser(BaseParser):
             if len(weight_values) > 1 and weight_values.nunique() > 1:
                 weight_info += f" (varies: {weight_values.min():.1f}-{weight_values.max():.1f}lbs)"
             
-            # Metadata statistics
-            device_value = df_subject['insulin_delivery_device'].iloc[0] if df_subject['insulin_delivery_device'].notna().any() else "N/A"
-            algorithm_value = df_subject['insulin_delivery_algorithm'].iloc[0] if df_subject['insulin_delivery_algorithm'].notna().any() else "N/A"
+            # Metadata statistics (simplified for BP/BPFiasp - all same device)
             ethnicity_value = df_subject['ethnicity'].iloc[0] if df_subject['ethnicity'].notna().any() else "N/A"
             
-            print(f"Subject {subject_id}: {df_subject.shape[0]} time points, "
+            # Insulin type statistics
+            bolus_insulin = df_subject['insulin_type_bolus'].iloc[0] if df_subject['insulin_type_bolus'].notna().any() else "N/A"
+            basal_insulin = df_subject['insulin_type_basal'].iloc[0] if df_subject['insulin_type_basal'].notna().any() else "N/A"
+            
+            print(f"Subject {subject_id} (BP/BPFiasp): {df_subject.shape[0]} time points, "
                   f"{df_subject['CGM'].notna().sum()} glucose readings, "
                   f"{nonzero_bolus} bolus events, "
                   f"{nonzero_basal} basal events, "
                   f"{meal_count} meal events, "
                   f"age: {age_value}, gender: {gender_value}, "
                   f"height: {height_info}, weight: {weight_info}, "
-                  f"device: {device_value}, algorithm: {algorithm_value}")
+                  f"ethnicity: {ethnicity_value}, "
+                  f"bolus insulin: {bolus_insulin}, basal insulin: {basal_insulin}")
         
         if not processed_dfs:
             print("No subjects processed")
@@ -1155,16 +1301,11 @@ class Parser(BaseParser):
             weight_stats = df_final.groupby('id')['weight'].first().describe()
             print(f"Weight statistics: mean={weight_stats['mean']:.1f}lbs, std={weight_stats['std']:.1f}lbs, range={weight_stats['min']:.1f}-{weight_stats['max']:.1f}lbs")
         
-        # Metadata statistics
+        # Metadata statistics (simplified for BP/BPFiasp subjects - all same device/algorithm)
         if 'insulin_delivery_device' in df_final.columns and df_final['insulin_delivery_device'].notna().sum() > 0:
-            device_dist = df_final.groupby('id')['insulin_delivery_device'].first().value_counts()
-            print(f"Insulin delivery devices: {device_dist.to_dict()}")
-        if 'insulin_delivery_algorithm' in df_final.columns and df_final['insulin_delivery_algorithm'].notna().sum() > 0:
-            algorithm_dist = df_final.groupby('id')['insulin_delivery_algorithm'].first().value_counts()
-            print(f"Insulin delivery algorithms: {algorithm_dist.to_dict()}")
-        if 'insulin_delivery_modality' in df_final.columns and df_final['insulin_delivery_modality'].notna().sum() > 0:
-            modality_dist = df_final.groupby('id')['insulin_delivery_modality'].first().value_counts()
-            print(f"Insulin delivery modalities: {modality_dist.to_dict()}")
+            device_value = df_final['insulin_delivery_device'].iloc[0]
+            algorithm_value = df_final['insulin_delivery_algorithm'].iloc[0] if 'insulin_delivery_algorithm' in df_final.columns else 'N/A'
+            print(f"All BP/BPFiasp subjects use: {device_value} with {algorithm_value} algorithm")
         if 'ethnicity' in df_final.columns and df_final['ethnicity'].notna().sum() > 0:
             ethnicity_dist = df_final.groupby('id')['ethnicity'].first().value_counts()
             print(f"Ethnicity distribution: {ethnicity_dist.head().to_dict()}")
@@ -1172,52 +1313,22 @@ class Parser(BaseParser):
             diag_age_stats = df_final.groupby('id')['age_of_diagnosis'].first().describe()
             print(f"Age of diagnosis statistics: mean={diag_age_stats['mean']:.1f}, std={diag_age_stats['std']:.1f}, range={diag_age_stats['min']:.0f}-{diag_age_stats['max']:.0f}")
         
+        # Insulin type statistics
+        if 'insulin_type_bolus' in df_final.columns and df_final['insulin_type_bolus'].notna().sum() > 0:
+            bolus_dist = df_final.groupby('id')['insulin_type_bolus'].first().value_counts()
+            print(f"Bolus insulin distribution: {bolus_dist.head().to_dict()}")
+        if 'insulin_type_basal' in df_final.columns and df_final['insulin_type_basal'].notna().sum() > 0:
+            basal_dist = df_final.groupby('id')['insulin_type_basal'].first().value_counts()
+            print(f"Basal insulin distribution: {basal_dist.head().to_dict()}")
+            
+            # Check how many subjects have same basal as bolus
+            if 'insulin_type_bolus' in df_final.columns:
+                subject_insulin = df_final.groupby('id')[['insulin_type_bolus', 'insulin_type_basal']].first()
+                same_insulin = (subject_insulin['insulin_type_bolus'] == subject_insulin['insulin_type_basal']).sum()
+                total_subjects = len(subject_insulin)
+                print(f"Subjects using same insulin for bolus and basal: {same_insulin}/{total_subjects} ({same_insulin/total_subjects*100:.1f}%)")
+        
         return df_final
-
-    def get_dataframes(self, file_path):
-        """
-        Extract the data from the dataset and process them into separate dataframes.
-        """
-        # TODO: Implement data extraction
-        # This should:
-        # 1. Read raw data files from file_path
-        # 2. Parse different data types (glucose, meals, insulin, exercise)
-        # 3. Convert to appropriate formats
-        # 4. Set datetime indices
-        # 5. Clean and validate data
-        
-        # Placeholder - return empty dataframes
-        df_glucose = pd.DataFrame()
-        df_meals = pd.DataFrame() 
-        df_bolus = pd.DataFrame()
-        df_basal = pd.DataFrame()
-        df_exercise = pd.DataFrame()
-        
-        print("Glucose data processed")
-        print("Meal data processed") 
-        print("Bolus data processed")
-        print("Basal data processed")
-        print("Exercise data processed")
-        
-        return df_glucose, df_meals, df_bolus, df_basal, df_exercise
-
-    def add_metadata_columns(self, df, file_path):
-        """
-        Add demographics and metadata columns to the processed dataframe.
-        """
-        # TODO: Implement metadata extraction
-        # This should:
-        # 1. Extract patient demographics (age, gender, etc.)
-        # 2. Add device information (CGM type, insulin delivery method)
-        # 3. Add clinical metadata (diagnosis age, ethnicity, etc.)
-        # 4. Merge with main dataframe
-        
-        # Placeholder implementation
-        unique_subjects = df['id'].unique() if 'id' in df.columns else []
-        
-        print(f"Added metadata columns for {len(unique_subjects)} subjects")
-        
-        return df
 
 
 def main():
