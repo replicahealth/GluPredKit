@@ -21,6 +21,48 @@ class Parser(BaseParser):
     def __init__(self):
         super().__init__()
 
+    def parse_dates_mixed_format(self, df, date_column, output_column=None):
+        """
+        Helper method to parse dates that may be in date-only or datetime format.
+        Date strings without time component are assumed to be midnight.
+        
+        Args:
+            df: DataFrame containing the date column
+            date_column: Name of the column containing date strings
+            output_column: Name of output column (defaults to date_column + '_parsed')
+        
+        Returns:
+            DataFrame with parsed dates in the output column
+        """
+        if output_column is None:
+            output_column = date_column + '_parsed'
+        
+        # Handle missing or empty values
+        valid_mask = df[date_column].notna() & (df[date_column] != '')
+        
+        if not valid_mask.any():
+            df[output_column] = pd.NaT
+            return df
+        
+        # Initialize output column
+        df[output_column] = pd.NaT
+        
+        # Date strings without time component are assumed to be midnight (≤10 characters)
+        b_only_date = valid_mask & (df[date_column].str.len() <= 10)
+        b_with_time = valid_mask & (df[date_column].str.len() > 10)
+        
+        # Parse date-only strings
+        if b_only_date.any():
+            df.loc[b_only_date, output_column] = pd.to_datetime(
+                df.loc[b_only_date, date_column], format='%m/%d/%Y', errors='coerce')
+        
+        # Parse datetime strings
+        if b_with_time.any():
+            df.loc[b_with_time, output_column] = pd.to_datetime(
+                df.loc[b_with_time, date_column], format='%m/%d/%Y %I:%M:%S %p', errors='coerce')
+        
+        return df
+
     def __call__(self, file_path: str, *args):
         """
         file_path -- the file path to the folder containing "IOBP2 RCT Public Dataset" folder.
@@ -135,18 +177,15 @@ class Parser(BaseParser):
             if 'DeviceDtTm' in df.columns:
                 print(f"Using datetime column: DeviceDtTm")
                 try:
-                    # Optimize datetime parsing by specifying format (based on sample: 8/14/2020 12:01:23 AM)
                     print("Parsing datetime (this may take a moment for large datasets)...")
-                    df['date'] = pd.to_datetime(df['DeviceDtTm'], format='%m/%d/%Y %I:%M:%S %p', errors='coerce')
+                    
+                    # Use helper method for mixed date format parsing
+                    df = self.parse_dates_mixed_format(df, 'DeviceDtTm', 'date')
                     
                     # Check for any parsing failures
                     failed_dates = df['date'].isna().sum()
                     if failed_dates > 0:
                         print(f"Warning: {failed_dates} dates could not be parsed")
-                        # Fallback to automatic parsing for failed dates
-                        mask = df['date'].isna()
-                        if mask.any():
-                            df.loc[mask, 'date'] = pd.to_datetime(df.loc[mask, 'DeviceDtTm'], errors='coerce')
                     
                     # Remove rows with invalid dates
                     df = df[df['date'].notna()]
@@ -242,18 +281,15 @@ class Parser(BaseParser):
             if 'DeviceDtTm' in df.columns:
                 print(f"Using datetime column: DeviceDtTm")
                 try:
-                    # Optimize datetime parsing by specifying format (based on sample: 8/14/2020 12:01:23 AM)
                     print("Parsing datetime for bolus data (this may take a moment for large datasets)...")
-                    df['date'] = pd.to_datetime(df['DeviceDtTm'], format='%m/%d/%Y %I:%M:%S %p', errors='coerce')
+                    
+                    # Use helper method for mixed date format parsing
+                    df = self.parse_dates_mixed_format(df, 'DeviceDtTm', 'date')
                     
                     # Check for any parsing failures
                     failed_dates = df['date'].isna().sum()
                     if failed_dates > 0:
                         print(f"Warning: {failed_dates} dates could not be parsed")
-                        # Fallback to automatic parsing for failed dates
-                        mask = df['date'].isna()
-                        if mask.any():
-                            df.loc[mask, 'date'] = pd.to_datetime(df.loc[mask, 'DeviceDtTm'], errors='coerce')
                     
                     # Remove rows with invalid dates
                     df = df[df['date'].notna()]
@@ -325,18 +361,15 @@ class Parser(BaseParser):
             if 'DeviceDtTm' in df.columns:
                 print(f"Using datetime column: DeviceDtTm")
                 try:
-                    # Optimize datetime parsing by specifying format (based on sample: 8/14/2020 12:01:23 AM)
                     print("Parsing datetime for basal data (this may take a moment for large datasets)...")
-                    df['date'] = pd.to_datetime(df['DeviceDtTm'], format='%m/%d/%Y %I:%M:%S %p', errors='coerce')
+                    
+                    # Use helper method for mixed date format parsing
+                    df = self.parse_dates_mixed_format(df, 'DeviceDtTm', 'date')
                     
                     # Check for any parsing failures
                     failed_dates = df['date'].isna().sum()
                     if failed_dates > 0:
                         print(f"Warning: {failed_dates} dates could not be parsed")
-                        # Fallback to automatic parsing for failed dates
-                        mask = df['date'].isna()
-                        if mask.any():
-                            df.loc[mask, 'date'] = pd.to_datetime(df.loc[mask, 'DeviceDtTm'], errors='coerce')
                     
                     # Remove rows with invalid dates
                     df = df[df['date'].notna()]
@@ -401,18 +434,15 @@ class Parser(BaseParser):
             if 'DeviceDtTm' in df.columns:
                 print(f"Using datetime column: DeviceDtTm")
                 try:
-                    # Optimize datetime parsing by specifying format (based on sample: 8/14/2020 12:01:23 AM)
                     print("Parsing datetime for meal label data (this may take a moment for large datasets)...")
-                    df['date'] = pd.to_datetime(df['DeviceDtTm'], format='%m/%d/%Y %I:%M:%S %p', errors='coerce')
+                    
+                    # Use helper method for mixed date format parsing
+                    df = self.parse_dates_mixed_format(df, 'DeviceDtTm', 'date')
                     
                     # Check for any parsing failures
                     failed_dates = df['date'].isna().sum()
                     if failed_dates > 0:
                         print(f"Warning: {failed_dates} dates could not be parsed")
-                        # Fallback to automatic parsing for failed dates
-                        mask = df['date'].isna()
-                        if mask.any():
-                            df.loc[mask, 'date'] = pd.to_datetime(df.loc[mask, 'DeviceDtTm'], errors='coerce')
                     
                     # Remove rows with invalid dates
                     df = df[df['date'].notna()]
@@ -603,9 +633,9 @@ class Parser(BaseParser):
                 kg_mask = weight_data['WeightUnits'].str.lower() == 'kg'
                 weight_data.loc[kg_mask, 'weight_lbs'] *= 2.20462  # Convert kg to lbs
                 
-                # Parse dates and set time to 8 AM
-                weight_data['date'] = pd.to_datetime(weight_data['WeightAssessDt'], errors='coerce')
-                weight_data['date'] = weight_data['date'].dt.date
+                # Parse dates using helper method and set time to 8 AM
+                weight_data = self.parse_dates_mixed_format(weight_data, 'WeightAssessDt', 'date_parsed')
+                weight_data['date'] = weight_data['date_parsed'].dt.date
                 weight_data['date'] = pd.to_datetime(weight_data['date'].astype(str) + ' 08:00:00')
                 
                 # Prepare records
@@ -637,9 +667,9 @@ class Parser(BaseParser):
                 # Convert all to feet (both cm->inches and original inches)
                 height_data['height_feet'] /= 12  # Convert inches to feet
                 
-                # Parse dates and set time to 8 AM
-                height_data['date'] = pd.to_datetime(height_data['HeightAssessDt'], errors='coerce')
-                height_data['date'] = height_data['date'].dt.date
+                # Parse dates using helper method and set time to 8 AM
+                height_data = self.parse_dates_mixed_format(height_data, 'HeightAssessDt', 'date_parsed')
+                height_data['date'] = height_data['date_parsed'].dt.date
                 height_data['date'] = pd.to_datetime(height_data['date'].astype(str) + ' 08:00:00')
                 
                 # Prepare records
@@ -927,28 +957,39 @@ class Parser(BaseParser):
         Priority: "Started after enrollment" > valid start/end dates > first available
         """
         try:
+            # Parse dates for both insulin types using helper method
+            for df_rows in [aspart_rows, lispro_rows]:
+                if not df_rows.empty:
+                    # Parse start dates
+                    if 'InsTypeStartDt' in df_rows.columns:
+                        df_rows = self.parse_dates_mixed_format(df_rows, 'InsTypeStartDt', 'start_date_parsed')
+                    
+                    # Parse stop dates
+                    if 'InsTypeStopDt' in df_rows.columns:
+                        df_rows = self.parse_dates_mixed_format(df_rows, 'InsTypeStopDt', 'stop_date_parsed')
+            
             # Check for "Started after enrollment" filter
             aspart_enrolled = aspart_rows[aspart_rows['InsTypeStart'] == 'Started after enrollment']
             lispro_enrolled = lispro_rows[lispro_rows['InsTypeStart'] == 'Started after enrollment']
             
-            # Check for valid start and end dates
+            # Check for valid start and end dates (using parsed dates)
             aspart_valid_dates = aspart_rows[
-                aspart_rows['InsTypeStartDt'].notna() & 
-                aspart_rows['InsTypeStopDt'].notna()
+                aspart_rows['start_date_parsed'].notna() & 
+                aspart_rows['stop_date_parsed'].notna()
             ]
             lispro_valid_dates = lispro_rows[
-                lispro_rows['InsTypeStartDt'].notna() & 
-                lispro_rows['InsTypeStopDt'].notna()
+                lispro_rows['start_date_parsed'].notna() & 
+                lispro_rows['stop_date_parsed'].notna()
             ]
             
             # Priority 1: "Started after enrollment" AND valid dates
             aspart_priority1 = aspart_enrolled[
-                aspart_enrolled['InsTypeStartDt'].notna() & 
-                aspart_enrolled['InsTypeStopDt'].notna()
+                aspart_enrolled['start_date_parsed'].notna() & 
+                aspart_enrolled['stop_date_parsed'].notna()
             ]
             lispro_priority1 = lispro_enrolled[
-                lispro_enrolled['InsTypeStartDt'].notna() & 
-                lispro_enrolled['InsTypeStopDt'].notna()
+                lispro_enrolled['start_date_parsed'].notna() & 
+                lispro_enrolled['stop_date_parsed'].notna()
             ]
             
             if not aspart_priority1.empty and not lispro_priority1.empty:
@@ -1272,6 +1313,7 @@ class Parser(BaseParser):
         
         # Combine all subjects
         df_final = pd.concat(processed_dfs)
+        df_final['insulin'] = df_final['bolus'].fillna(0) + df_final['basal'].fillna(0)
         
         # Summary statistics
         total_glucose = df_final['CGM'].notna().sum()
