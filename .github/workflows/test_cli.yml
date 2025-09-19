@@ -1,5 +1,5 @@
 name: test_cli
-on: pull_request
+on: push
 permissions:
   contents: read
 jobs:
