@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "glupredkit"
-version = "1.0.20"
+version = "1.0.21"
 authors = [
   { name="Miriam K. Wolff", email="miriamkwolff@outlook.com" },
 ]
