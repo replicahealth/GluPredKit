@@ -174,6 +174,27 @@ class Parser(BaseParser):
                                     inplace=True)
                             df.rename(columns={'merged_basal': 'basal'}, inplace=True)
 
+                        # Try to extract reservoir data from APSData if available
+                        df['reservoir'] = np.nan
+                        for basal_file in basal_files:
+                            with zip_ref.open(basal_file) as f:
+                                aps_df = pd.read_json(f, convert_dates=False)
+                                if 'pump' in aps_df.columns:
+                                    reservoir_df = pd.DataFrame()
+                                    reservoir_df['queuedOn'] = pd.to_datetime(aps_df['queuedOn'], unit='ms')
+                                    reservoir_df['reservoir'] = aps_df['pump'].apply(
+                                        lambda x: x.get('reservoir') if isinstance(x, dict) else np.nan
+                                    )
+                                    reservoir_df.rename(columns={'queuedOn': 'date'}, inplace=True)
+                                    reservoir_df.set_index('date', inplace=True)
+                                    reservoir_df.sort_index(inplace=True)
+                                    reservoir_df = reservoir_df[reservoir_df['reservoir'].notna()]
+                                    if not reservoir_df.empty:
+                                        reservoir_df = reservoir_df.resample('5min').last()
+                                        df = pd.merge(df, reservoir_df, on="date", how='outer')
+                                        df['reservoir'] = df['reservoir'].ffill()
+                                        break
+
                         # Merge bolus and basal into an insulin column
                         df['insulin'] = df['bolus'] + df['basal'] * 5 / 60
 
@@ -354,6 +375,57 @@ class Parser(BaseParser):
 
                     # Drop the duration column
                     df.drop(columns='duration', inplace=True)
+
+                    # Reservoir data from devicestatus
+                    devicestatus_files = get_relevant_files('devicestatus')
+                    reservoir_dfs = []
+                    for devicestatus_file in devicestatus_files:
+                        with zip_ref.open(devicestatus_file) as f:
+                            if devicestatus_file.startswith(sub_folder_path):
+                                try:
+                                    devicestatus_df = pd.read_json(f, convert_dates=False)
+                                except ValueError as e:
+                                    # Reset the file handle to the start
+                                    f.seek(0)
+                                    devicestatus_df = pd.DataFrame()
+                                    print(f"Error parsing devicestatus JSON directly: {e}")
+                                    for line in f:
+                                        try:
+                                            data = json.loads(line)
+                                            devicestatus_df = devicestatus_df._append(data, ignore_index=True)
+                                        except json.JSONDecodeError as json_err:
+                                            print(f"Skipping devicestatus line due to error: {json_err}")
+                            else:
+                                devicestatus_df = pd.read_json(f, convert_dates=False, lines=True)
+                            
+                            if devicestatus_df.empty:
+                                continue
+                            
+                            # Extract reservoir data if available
+                            if 'pump' in devicestatus_df.columns:
+                                reservoir_df = pd.DataFrame()
+                                reservoir_df['created_at'] = devicestatus_df['created_at'].apply(parse_datetime_without_timezone)
+                                # Extract reservoir value from nested pump object
+                                reservoir_df['reservoir'] = devicestatus_df['pump'].apply(
+                                    lambda x: x.get('reservoir') if isinstance(x, dict) else np.nan
+                                )
+                                reservoir_df = reservoir_df[['created_at', 'reservoir']]
+                                reservoir_df.rename(columns={'created_at': 'date'}, inplace=True)
+                                reservoir_df.set_index('date', inplace=True)
+                                reservoir_df.sort_index(inplace=True)
+                                reservoir_df = reservoir_df[reservoir_df['reservoir'].notna()]
+                                if not reservoir_df.empty:
+                                    reservoir_dfs.append(reservoir_df)
+                    
+                    # Merge reservoir data if available
+                    if reservoir_dfs:
+                        df_reservoir = pd.concat(reservoir_dfs)
+                        df_reservoir = df_reservoir.resample('5min').last()  # Use last value in each 5-min window
+                        df = pd.merge(df, df_reservoir, on="date", how='outer')
+                        # Forward fill reservoir values since they don't change frequently
+                        df['reservoir'] = df['reservoir'].ffill()
+                    else:
+                        df['reservoir'] = np.nan
 
                     # Basal rates
                     profile_files = get_relevant_files('profile')
