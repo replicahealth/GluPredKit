@@ -74,3 +74,17 @@ In the iLet trial, continuous data is primarily collected for participants using
 - Insulin type determination prioritizes enrollment status and date validity
 
 
+### Control Arm Data
+
+
+## T1DEXI
+
+### Assumptions and Limitations
+
+- Subjects on MDI kept a diary of logged insulin for MDI participants, but there are potential issues with using diary records
+- 
+
+
+
+
+

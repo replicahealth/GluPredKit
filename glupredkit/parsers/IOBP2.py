@@ -239,7 +239,7 @@ class Parser(BaseParser):
             
             # Filter roster for BP and BPFiasp treatment groups
             bp_roster = roster[roster['TrtGroup'].isin(['BP', 'BPFiasp'])].copy()
-            
+
             if bp_roster.empty:
                 print("No subjects found in BP or BPFiasp treatment groups in roster")
                 return pd.DataFrame()
@@ -1313,7 +1313,8 @@ class Parser(BaseParser):
         
         # Combine all subjects
         df_final = pd.concat(processed_dfs)
-        df_final['insulin'] = df_final['bolus'].fillna(0) + df_final['basal'].fillna(0)
+        df_final['insulin'] = df_final['bolus'].fillna(0) + df_final['basal']
+        df_final['source_file'] = 'IOBP2'
         
         # Summary statistics
         total_glucose = df_final['CGM'].notna().sum()
