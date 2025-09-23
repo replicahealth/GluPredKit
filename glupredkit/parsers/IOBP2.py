@@ -1,6 +1,6 @@
 """
-The IOBP2 parser processes data from the IOBP2 dataset, filtering for BP and BPFiasp treatment groups only,
-and returns the data merged into the same time grid in a dataframe.
+The IOBP2 parser processes data from the IOBP2 dataset, and returns the data merged into the same time grid in a
+dataframe.
 """
 try:
     from .base_parser import BaseParser
@@ -67,7 +67,7 @@ class Parser(BaseParser):
         """
         file_path -- the file path to the folder containing "IOBP2 RCT Public Dataset" folder.
         """
-        print(f"Processing IOBP2 data (BP/BPFiasp treatment groups only) from {file_path}")
+        print(f"Processing IOBP2 data from {file_path}")
         
         # Construct path to the CGM data file
         cgm_data_path = os.path.join(file_path, "IOBP2 RCT Public Dataset", "Data Tables", "IOBP2DeviceiLet.txt")
@@ -87,16 +87,6 @@ class Parser(BaseParser):
             return pd.DataFrame()
         
         print(f"Loaded CGM data: {df_glucose.shape[0]} records for {df_glucose['id'].nunique()} subjects")
-
-        # Filter for BP and BPFiasp treatment groups only
-        print("Filtering for BP and BPFiasp treatment groups...")
-        df_glucose = self.filter_bp_subjects(df_glucose, file_path)
-        
-        if df_glucose.empty:
-            print("No subjects found in BP or BPFiasp treatment groups")
-            return pd.DataFrame()
-        
-        print(f"After BP/BPFiasp filtering: {df_glucose.shape[0]} records for {df_glucose['id'].nunique()} subjects")
 
         # Process bolus data
         print(f"Loading bolus data from: {cgm_data_path}")
@@ -222,43 +212,6 @@ class Parser(BaseParser):
         except Exception as e:
             print(f"Error loading CGM data: {e}")
             return pd.DataFrame()
-
-    def filter_bp_subjects(self, df_glucose, file_path):
-        """
-        Filter subjects to include only those in BP and BPFiasp treatment groups.
-        """
-        try:
-            # Load roster data to get treatment groups
-            roster_path = os.path.join(file_path, "IOBP2 RCT Public Dataset", "Data Tables", "IOBP2PtRoster.txt")
-            
-            if not os.path.exists(roster_path):
-                print(f"Warning: Roster file not found at: {roster_path}")
-                return df_glucose  # Return unchanged if no roster data
-            
-            roster = pd.read_csv(roster_path, delimiter='|', low_memory=False)
-            
-            # Filter roster for BP and BPFiasp treatment groups
-            bp_roster = roster[roster['TrtGroup'].isin(['BP', 'BPFiasp'])].copy()
-
-            if bp_roster.empty:
-                print("No subjects found in BP or BPFiasp treatment groups in roster")
-                return pd.DataFrame()
-            
-            # Create subject IDs to match
-            bp_roster['id'] = 'IOBP2-' + bp_roster['PtID'].astype(str)
-            bp_subject_ids = set(bp_roster['id'].unique())
-            
-            print(f"Found {len(bp_subject_ids)} subjects in BP/BPFiasp groups")
-            print(f"Treatment group distribution: {bp_roster['TrtGroup'].value_counts().to_dict()}")
-            
-            # Filter glucose data for BP subjects only
-            df_glucose_filtered = df_glucose[df_glucose['id'].isin(bp_subject_ids)].copy()
-            
-            return df_glucose_filtered
-            
-        except Exception as e:
-            print(f"Error filtering BP subjects: {e}")
-            return df_glucose  # Return unchanged on error
 
     def load_bolus_data(self, cgm_data_path):
         """
@@ -704,7 +657,7 @@ class Parser(BaseParser):
     def load_metadata(self, file_path):
         """
         Load and process metadata from IOBP2 roster and screening files.
-        SIMPLIFIED FOR BP/BPFiasp SUBJECTS ONLY - all use Beta Bionics Gen 4 iLet with Bionic Pancreas algorithm.
+        All use Beta Bionics Gen 4 iLet with Bionic Pancreas algorithm.
         """
         try:
             # Construct paths to roster and screening files
@@ -719,26 +672,19 @@ class Parser(BaseParser):
                 print(f"Warning: Screening file not found at: {screening_path}")
                 return pd.DataFrame()
             
-            print("Loading roster and screening data for BP/BPFiasp metadata...")
+            print("Loading roster and screening metadata...")
             
             # Load roster and screening data
             roster = pd.read_csv(roster_path, delimiter='|', low_memory=False)
             screening = pd.read_csv(screening_path, delimiter='|', low_memory=False)
-            
-            # Filter roster for BP and BPFiasp treatment groups only
-            roster = roster[roster['TrtGroup'].isin(['BP', 'BPFiasp'])].copy()
-            
-            if roster.empty:
-                print("No subjects found in BP or BPFiasp treatment groups")
-                return pd.DataFrame()
-            
-            print(f"BP/BPFiasp roster shape: {roster.shape}")
+
+            print(f"Roster shape: {roster.shape}")
             print(f"Screening shape: {screening.shape}")
             print(f"Treatment group distribution: {roster['TrtGroup'].value_counts().to_dict()}")
             
             # Merge roster with screening data
             merged_data = roster.merge(screening, on='PtID', how='inner')
-            print(f"Merged BP/BPFiasp data shape: {merged_data.shape}")
+            print(f"Merged data shape: {merged_data.shape}")
             
             # Process subject ID to match other data
             merged_data['id'] = 'IOBP2-' + merged_data['PtID'].astype(str)
@@ -747,7 +693,7 @@ class Parser(BaseParser):
             df_metadata = pd.DataFrame()
             df_metadata['id'] = merged_data['id']
             
-            # SIMPLIFIED: All BP/BPFiasp subjects use Beta Bionics with Bionic Pancreas algorithm
+            # All subjects use Beta Bionics with Bionic Pancreas algorithm
             df_metadata['insulin_delivery_device'] = 'Beta Bionics Gen 4 iLet'
             df_metadata['insulin_delivery_algorithm'] = 'iLet Bionic Pancreas'
             df_metadata['insulin_delivery_modality'] = 'AID'  # Automated Insulin Delivery
@@ -787,7 +733,7 @@ class Parser(BaseParser):
             # Remove any rows with missing subject ID
             df_metadata = df_metadata[df_metadata['id'].notna()]
             
-            print(f"Processed metadata for {len(df_metadata)} BP/BPFiasp subjects")
+            print(f"Processed metadata for {len(df_metadata)} subjects")
             print(f"Subjects: {sorted(df_metadata['id'].unique())}")
             
             # Show distributions (simplified since all BP subjects have same device/algorithm)
@@ -805,7 +751,7 @@ class Parser(BaseParser):
         """
         Load and process insulin data from IOBP2Insulin.txt file.
         For BP/BPFiasp subjects: BPFiasp subjects get "Fiasp" for both bolus and basal,
-        BP subjects use time overlap logic to select best insulin matches with CGM data.
+        BP and Control subjects use time overlap logic to select best insulin matches with CGM data.
         """
         try:
             # Get treatment group information for each subject
@@ -814,7 +760,6 @@ class Parser(BaseParser):
             
             if os.path.exists(roster_path):
                 roster = pd.read_csv(roster_path, delimiter='|', low_memory=False)
-                roster = roster[roster['TrtGroup'].isin(['BP', 'BPFiasp'])].copy()
                 roster['id'] = 'IOBP2-' + roster['PtID'].astype(str)
                 treatment_groups = dict(zip(roster['id'], roster['TrtGroup']))
                 print(f"Treatment groups loaded: {len(treatment_groups)} subjects")
@@ -828,7 +773,7 @@ class Parser(BaseParser):
                 print(f"Warning: Insulin data file not found at: {insulin_data_path}")
                 return pd.DataFrame()
             
-            print("Loading insulin data for BP/BPFiasp subjects...")
+            print("Loading insulin data for subjects...")
             
             # Get all subject IDs from CGM data
             all_subject_ids = df_glucose['id'].unique() if not df_glucose.empty else []
@@ -849,10 +794,19 @@ class Parser(BaseParser):
                     
                 elif trt_group == 'BP':
                     # BP subjects: Use time overlap logic with insulin data
-                    best_insulin, _ = self.get_best_insulin_for_subject(
-                        subject_id, insulin_data_path, df_glucose
-                    )
+                    best_insulin, _ = self.get_best_insulin_for_subject(subject_id, insulin_data_path,
+                                                                        include_fiasp=False)
                     
+                    insulin_assignments.append({
+                        'id': subject_id,
+                        'insulin_type_bolus': best_insulin if best_insulin else np.nan,
+                        'insulin_type_basal': best_insulin if best_insulin else np.nan
+                    })
+
+                elif trt_group == 'Control':
+                    best_insulin, _ = self.get_best_insulin_for_subject(subject_id, insulin_data_path,
+                                                                        include_fiasp=True)
+
                     insulin_assignments.append({
                         'id': subject_id,
                         'insulin_type_bolus': best_insulin if best_insulin else np.nan,
@@ -889,10 +843,15 @@ class Parser(BaseParser):
             print(f"Error loading insulin data: {e}")
             return pd.DataFrame()
 
-    def get_best_insulin_for_subject(self, subject_id, insulin_data_path, df_glucose):
+    def get_best_insulin_for_subject(self, subject_id, insulin_data_path, include_fiasp=False):
         """
         Helper method to determine insulin type for a BP subject.
-        Determines whether subject used Lispro or Aspart and sets same for both bolus and basal.
+        Determines whether subject used Lispro, Aspart, or Fiasp and sets same for both bolus and basal.
+        
+        Args:
+            subject_id: Subject identifier
+            insulin_data_path: Path to insulin data file
+            include_fiasp: If True, also consider Fiasp as a possible insulin option
         """
         try:
             # Load insulin data
@@ -915,21 +874,42 @@ class Parser(BaseParser):
                 print(f"No pump insulin data found for subject {subject_id}")
                 return None, None
             
-            # Search for Aspart/Lispro samples
-            aspart_rows = pump_insulin[pump_insulin['InsulinName'].str.lower().str.contains('aspart|novolog', case=False, na=False)]
+            # Search for Aspart/Lispro/Fiasp samples
+            aspart_rows = pump_insulin[pump_insulin['InsulinName'].str.lower().str.contains('aspart', case=False, na=False)]
             lispro_rows = pump_insulin[pump_insulin['InsulinName'].str.lower().str.contains('lispro|humalog', case=False, na=False)]
+            fiasp_rows = pd.DataFrame()  # Initialize empty
+            
+            if include_fiasp:
+                fiasp_rows = pump_insulin[pump_insulin['InsulinName'].str.lower().str.contains('fiasp', case=False, na=False)]
             
             has_aspart = not aspart_rows.empty
             has_lispro = not lispro_rows.empty
+            has_fiasp = not fiasp_rows.empty and include_fiasp
             
-            # Log if both alternatives are available
-            if has_aspart and has_lispro:
-                print(f"Subject {subject_id}: Has both Aspart and Lispro options available")
+            # Log available alternatives
+            available_options = []
+            if has_aspart:
+                available_options.append("Aspart")
+            if has_lispro:
+                available_options.append("Lispro")
+            if has_fiasp:
+                available_options.append("Fiasp")
+            
+            if len(available_options) > 1:
+                print(f"Subject {subject_id}: Has multiple insulin options available: {', '.join(available_options)}")
             
             # Determine which insulin to use
-            if has_aspart and has_lispro:
-                # Both available - prioritize based on criteria
-                chosen_insulin = self._prioritize_insulin(subject_id, aspart_rows, lispro_rows)
+            if len(available_options) > 1:
+                # Multiple available - prioritize based on criteria
+                insulin_data_dict = {}
+                if has_aspart:
+                    insulin_data_dict['Novolog (Aspart)'] = aspart_rows
+                if has_lispro:
+                    insulin_data_dict['Humalog (Lispro)'] = lispro_rows
+                if has_fiasp:
+                    insulin_data_dict['Fiasp'] = fiasp_rows
+                
+                chosen_insulin = self._prioritize_insulin(subject_id, insulin_data_dict)
             elif has_aspart:
                 # Only Aspart available
                 chosen_insulin = 'Novolog (Aspart)'
@@ -938,8 +918,13 @@ class Parser(BaseParser):
                 # Only Lispro available
                 chosen_insulin = 'Humalog (Lispro)'
                 print(f"Subject {subject_id}: Only Lispro available, using Humalog (Lispro)")
+            elif has_fiasp:
+                # Only Fiasp available
+                chosen_insulin = 'Fiasp'
+                print(f"Subject {subject_id}: Only Fiasp available, using Fiasp")
             else:
-                print(f"Warning: No Aspart or Lispro insulin found for BP subject {subject_id}")
+                insulin_types = "Aspart, Lispro" + (", or Fiasp" if include_fiasp else "")
+                print(f"Warning: No {insulin_types} insulin found for BP subject {subject_id}")
                 return None, None
             
             print(f"Subject {subject_id}: Assigned insulin type '{chosen_insulin}' for both bolus and basal")
@@ -951,14 +936,18 @@ class Parser(BaseParser):
             print(f"Error processing insulin data for subject {subject_id}: {e}")
             return None, None
     
-    def _prioritize_insulin(self, subject_id, aspart_rows, lispro_rows):
+    def _prioritize_insulin(self, subject_id, insulin_data_dict):
         """
-        Helper method to prioritize between Aspart and Lispro when both are available.
-        Priority: "Started after enrollment" > valid start/end dates > first available
+        Helper method to prioritize between multiple insulin types when available.
+        Priority: Started after enrollment > InsRoute == "Pump" > valid start/end dates > last available
+        
+        Args:
+            subject_id: Subject identifier
+            insulin_data_dict: Dictionary mapping insulin names to their data rows
         """
         try:
-            # Parse dates for both insulin types using helper method
-            for df_rows in [aspart_rows, lispro_rows]:
+            # Parse dates for all insulin types using helper method
+            for insulin_name, df_rows in insulin_data_dict.items():
                 if not df_rows.empty:
                     # Parse start dates
                     if 'InsTypeStartDt' in df_rows.columns:
@@ -967,70 +956,81 @@ class Parser(BaseParser):
                     # Parse stop dates
                     if 'InsTypeStopDt' in df_rows.columns:
                         df_rows = self.parse_dates_mixed_format(df_rows, 'InsTypeStopDt', 'stop_date_parsed')
+                    
+                    # Update the dictionary with parsed data
+                    insulin_data_dict[insulin_name] = df_rows
             
-            # Check for "Started after enrollment" filter
-            aspart_enrolled = aspart_rows[aspart_rows['InsTypeStart'] == 'Started after enrollment']
-            lispro_enrolled = lispro_rows[lispro_rows['InsTypeStart'] == 'Started after enrollment']
+            # Priority evaluation function for each insulin
+            def evaluate_insulin_priority(insulin_name, df_rows):
+                # Priority 1: "Started after enrollment"
+                has_started_after_enrollment = (df_rows['InsTypeStart'] == 'Started after enrollment').any()
+                
+                # Priority 2: InsRoute == "Pump" (should already be filtered, but check anyway)
+                has_pump_route = (df_rows['InsRoute'] == 'Pump').any()
+                
+                # Priority 3: Valid start/end dates
+                has_valid_dates = (
+                    df_rows['start_date_parsed'].notna() & 
+                    df_rows['stop_date_parsed'].notna()
+                ).any()
+                
+                # Priority 4: Last available (most recent start date)
+                last_available_score = 0
+                if 'start_date_parsed' in df_rows.columns:
+                    valid_start_dates = df_rows['start_date_parsed'].dropna()
+                    if not valid_start_dates.empty:
+                        # Use timestamp for comparison (more recent = higher score)
+                        last_available_score = valid_start_dates.max().timestamp()
+                
+                return (
+                    has_started_after_enrollment,
+                    has_pump_route, 
+                    has_valid_dates,
+                    last_available_score
+                )
             
-            # Check for valid start and end dates (using parsed dates)
-            aspart_valid_dates = aspart_rows[
-                aspart_rows['start_date_parsed'].notna() & 
-                aspart_rows['stop_date_parsed'].notna()
-            ]
-            lispro_valid_dates = lispro_rows[
-                lispro_rows['start_date_parsed'].notna() & 
-                lispro_rows['stop_date_parsed'].notna()
-            ]
+            # Evaluate all insulin types
+            insulin_scores = {}
+            for insulin_name, df_rows in insulin_data_dict.items():
+                insulin_scores[insulin_name] = evaluate_insulin_priority(insulin_name, df_rows)
             
-            # Priority 1: "Started after enrollment" AND valid dates
-            aspart_priority1 = aspart_enrolled[
-                aspart_enrolled['start_date_parsed'].notna() & 
-                aspart_enrolled['stop_date_parsed'].notna()
-            ]
-            lispro_priority1 = lispro_enrolled[
-                lispro_enrolled['start_date_parsed'].notna() & 
-                lispro_enrolled['stop_date_parsed'].notna()
-            ]
+            # Sort by priority (descending order)
+            sorted_insulins = sorted(
+                insulin_scores.items(), 
+                key=lambda x: x[1], 
+                reverse=True
+            )
             
-            if not aspart_priority1.empty and not lispro_priority1.empty:
-                # Both have highest priority - choose Aspart arbitrarily
-                print(f"Subject {subject_id}: Both insulins have 'Started after enrollment' + valid dates, choosing Aspart")
-                return 'Novolog (Aspart)'
-            elif not aspart_priority1.empty:
-                print(f"Subject {subject_id}: Aspart has 'Started after enrollment' + valid dates")
-                return 'Novolog (Aspart)'
-            elif not lispro_priority1.empty:
-                print(f"Subject {subject_id}: Lispro has 'Started after enrollment' + valid dates")
-                return 'Humalog (Lispro)'
+            # Select the highest priority insulin
+            chosen_insulin_name = sorted_insulins[0][0]
+            chosen_score = sorted_insulins[0][1]
             
-            # Priority 2: "Started after enrollment" only
-            if not aspart_enrolled.empty and not lispro_enrolled.empty:
-                print(f"Subject {subject_id}: Both insulins have 'Started after enrollment', choosing Aspart")
-                return 'Novolog (Aspart)'
-            elif not aspart_enrolled.empty:
-                print(f"Subject {subject_id}: Aspart has 'Started after enrollment'")
-                return 'Novolog (Aspart)'
-            elif not lispro_enrolled.empty:
-                print(f"Subject {subject_id}: Lispro has 'Started after enrollment'")
-                return 'Humalog (Lispro)'
+            # Log the decision reasoning
+            priority_reasons = []
+            if chosen_score[0]:  # Started after enrollment
+                priority_reasons.append("Started after enrollment")
+            if chosen_score[1]:  # Pump route
+                priority_reasons.append("InsRoute=Pump")
+            if chosen_score[2]:  # Valid dates
+                priority_reasons.append("valid start/end dates")
+            if chosen_score[3] > 0:  # Has some date info
+                priority_reasons.append("last available")
             
-            # Priority 3: Valid dates only
-            if not aspart_valid_dates.empty and not lispro_valid_dates.empty:
-                print(f"Subject {subject_id}: Both insulins have valid dates, choosing Aspart")
-                return 'Novolog (Aspart)'
-            elif not aspart_valid_dates.empty:
-                print(f"Subject {subject_id}: Aspart has valid dates")
-                return 'Novolog (Aspart)'
-            elif not lispro_valid_dates.empty:
-                print(f"Subject {subject_id}: Lispro has valid dates")
-                return 'Humalog (Lispro)'
+            reason = " + ".join(priority_reasons) if priority_reasons else "default selection"
+            print(f"Subject {subject_id}: Chose {chosen_insulin_name} based on: {reason}")
             
-            # Default: Choose Aspart arbitrarily
-            print(f"Subject {subject_id}: Neither insulin meets priority criteria, choosing Aspart by default")
-            return 'Novolog (Aspart)'
+            # Check if there were ties and log
+            ties = [name for name, score in sorted_insulins if score == chosen_score]
+            if len(ties) > 1:
+                print(f"Subject {subject_id}: Tie between {', '.join(ties)}, selected {chosen_insulin_name}")
+            
+            return chosen_insulin_name
             
         except Exception as e:
             print(f"Error prioritizing insulin for subject {subject_id}: {e}")
+            # Return first available insulin as fallback
+            if insulin_data_dict:
+                return list(insulin_data_dict.keys())[0]
             return 'Novolog (Aspart)'  # Default fallback
 
     def resample_data(self, df_glucose, df_bolus, df_basal, df_meal_labels=None, df_age=None, df_gender=None, df_height_weight=None, df_metadata=None, df_insulin=None):
@@ -1290,14 +1290,14 @@ class Parser(BaseParser):
             if len(weight_values) > 1 and weight_values.nunique() > 1:
                 weight_info += f" (varies: {weight_values.min():.1f}-{weight_values.max():.1f}lbs)"
             
-            # Metadata statistics (simplified for BP/BPFiasp - all same device)
+            # Metadata statistics
             ethnicity_value = df_subject['ethnicity'].iloc[0] if df_subject['ethnicity'].notna().any() else "N/A"
             
             # Insulin type statistics
             bolus_insulin = df_subject['insulin_type_bolus'].iloc[0] if df_subject['insulin_type_bolus'].notna().any() else "N/A"
             basal_insulin = df_subject['insulin_type_basal'].iloc[0] if df_subject['insulin_type_basal'].notna().any() else "N/A"
             
-            print(f"Subject {subject_id} (BP/BPFiasp): {df_subject.shape[0]} time points, "
+            print(f"Subject {subject_id}: {df_subject.shape[0]} time points, "
                   f"{df_subject['CGM'].notna().sum()} glucose readings, "
                   f"{nonzero_bolus} bolus events, "
                   f"{nonzero_basal} basal events, "
@@ -1344,11 +1344,11 @@ class Parser(BaseParser):
             weight_stats = df_final.groupby('id')['weight'].first().describe()
             print(f"Weight statistics: mean={weight_stats['mean']:.1f}lbs, std={weight_stats['std']:.1f}lbs, range={weight_stats['min']:.1f}-{weight_stats['max']:.1f}lbs")
         
-        # Metadata statistics (simplified for BP/BPFiasp subjects - all same device/algorithm)
+        # Metadata statistics
         if 'insulin_delivery_device' in df_final.columns and df_final['insulin_delivery_device'].notna().sum() > 0:
             device_value = df_final['insulin_delivery_device'].iloc[0]
             algorithm_value = df_final['insulin_delivery_algorithm'].iloc[0] if 'insulin_delivery_algorithm' in df_final.columns else 'N/A'
-            print(f"All BP/BPFiasp subjects use: {device_value} with {algorithm_value} algorithm")
+            print(f"All subjects use: {device_value} with {algorithm_value} algorithm")
         if 'ethnicity' in df_final.columns and df_final['ethnicity'].notna().sum() > 0:
             ethnicity_dist = df_final.groupby('id')['ethnicity'].first().value_counts()
             print(f"Ethnicity distribution: {ethnicity_dist.head().to_dict()}")
