@@ -726,6 +726,10 @@ class Parser(BaseParser):
             
             # age_of_diagnosis - From DiagAge column
             df_metadata['age_of_diagnosis'] = pd.to_numeric(merged_data['DiagAge'], errors='coerce')
+
+            df_metadata['treatment_group'] = merged_data['TrtGroup']
+            df_metadata['randomization_date'] = pd.to_datetime(merged_data['RandDt'])
+            df_metadata['extension_date'] = pd.to_datetime(merged_data['TransRandDt'])
             
             # is_pregnant - Pregnancy is exclusion criterion for IOBP2
             df_metadata['is_pregnant'] = False
@@ -862,25 +866,22 @@ class Parser(BaseParser):
             
             # Filter for this subject
             subject_insulin = df_insulin[df_insulin['PtID'].astype(str) == actual_subject_id].copy()
+
+            default = 'Humalog (Lispro) or Novolog (Aspart)'
+            if include_fiasp:
+                default = None  # Does not make sense to combine default with different absorption profiles
             
             if subject_insulin.empty:
                 print(f"No insulin data found for subject {subject_id}")
-                return None, None
-            
-            # Filter on InsRoute = "Pump"
-            pump_insulin = subject_insulin[subject_insulin['InsRoute'] == 'Pump'].copy()
-            
-            if pump_insulin.empty:
-                print(f"No pump insulin data found for subject {subject_id}")
-                return None, None
-            
+                return default, default
+
             # Search for Aspart/Lispro/Fiasp samples
-            aspart_rows = pump_insulin[pump_insulin['InsulinName'].str.lower().str.contains('aspart', case=False, na=False)]
-            lispro_rows = pump_insulin[pump_insulin['InsulinName'].str.lower().str.contains('lispro|humalog', case=False, na=False)]
+            aspart_rows = subject_insulin[subject_insulin['InsulinName'].str.lower().str.contains('aspart', case=False, na=False)]
+            lispro_rows = subject_insulin[subject_insulin['InsulinName'].str.lower().str.contains('lispro|humalog', case=False, na=False)]
             fiasp_rows = pd.DataFrame()  # Initialize empty
             
             if include_fiasp:
-                fiasp_rows = pump_insulin[pump_insulin['InsulinName'].str.lower().str.contains('fiasp', case=False, na=False)]
+                fiasp_rows = subject_insulin[subject_insulin['InsulinName'].str.lower().str.contains('fiasp', case=False, na=False)]
             
             has_aspart = not aspart_rows.empty
             has_lispro = not lispro_rows.empty
@@ -910,6 +911,8 @@ class Parser(BaseParser):
                     insulin_data_dict['Fiasp'] = fiasp_rows
                 
                 chosen_insulin = self._prioritize_insulin(subject_id, insulin_data_dict)
+                if chosen_insulin is None:
+                    return default, default
             elif has_aspart:
                 # Only Aspart available
                 chosen_insulin = 'Novolog (Aspart)'
@@ -962,31 +965,22 @@ class Parser(BaseParser):
             
             # Priority evaluation function for each insulin
             def evaluate_insulin_priority(insulin_name, df_rows):
-                # Priority 1: "Started after enrollment"
-                has_started_after_enrollment = (df_rows['InsTypeStart'] == 'Started after enrollment').any()
-                
-                # Priority 2: InsRoute == "Pump" (should already be filtered, but check anyway)
+                # Priority 1: InsRoute == "Pump" (should already be filtered, but check anyway)
                 has_pump_route = (df_rows['InsRoute'] == 'Pump').any()
-                
+
+                # Priority 2: "Started after enrollment"
+                has_started_after_enrollment = (df_rows['InsTypeStart'] == 'Started after enrollment').any()
+
                 # Priority 3: Valid start/end dates
                 has_valid_dates = (
                     df_rows['start_date_parsed'].notna() & 
                     df_rows['stop_date_parsed'].notna()
                 ).any()
-                
-                # Priority 4: Last available (most recent start date)
-                last_available_score = 0
-                if 'start_date_parsed' in df_rows.columns:
-                    valid_start_dates = df_rows['start_date_parsed'].dropna()
-                    if not valid_start_dates.empty:
-                        # Use timestamp for comparison (more recent = higher score)
-                        last_available_score = valid_start_dates.max().timestamp()
-                
+
                 return (
+                    has_pump_route,
                     has_started_after_enrollment,
-                    has_pump_route, 
-                    has_valid_dates,
-                    last_available_score
+                    has_valid_dates
                 )
             
             # Evaluate all insulin types
@@ -1023,6 +1017,7 @@ class Parser(BaseParser):
             ties = [name for name, score in sorted_insulins if score == chosen_score]
             if len(ties) > 1:
                 print(f"Subject {subject_id}: Tie between {', '.join(ties)}, selected {chosen_insulin_name}")
+                return None
             
             return chosen_insulin_name
             
@@ -1031,7 +1026,7 @@ class Parser(BaseParser):
             # Return first available insulin as fallback
             if insulin_data_dict:
                 return list(insulin_data_dict.keys())[0]
-            return 'Novolog (Aspart)'  # Default fallback
+            return None
 
     def resample_data(self, df_glucose, df_bolus, df_basal, df_meal_labels=None, df_age=None, df_gender=None, df_height_weight=None, df_metadata=None, df_insulin=None):
         """
@@ -1210,26 +1205,20 @@ class Parser(BaseParser):
                 df_subject['weight'] = np.nan
             
             # Add metadata for this subject if available (block sparse - constant per subject)
-            if df_metadata is not None and not df_metadata.empty:
-                subject_metadata = df_metadata[df_metadata['id'] == subject_id]
-                if not subject_metadata.empty:
-                    # Metadata is constant for the subject, so use the first (and only) values
-                    metadata_row = subject_metadata.iloc[0]
-                    df_subject['insulin_delivery_device'] = metadata_row['insulin_delivery_device']
-                    df_subject['insulin_delivery_algorithm'] = metadata_row['insulin_delivery_algorithm']  
-                    df_subject['insulin_delivery_modality'] = metadata_row['insulin_delivery_modality']
-                    df_subject['cgm_device'] = metadata_row['cgm_device']
-                    df_subject['ethnicity'] = metadata_row['ethnicity']
-                    df_subject['age_of_diagnosis'] = metadata_row['age_of_diagnosis']
-                    df_subject['is_pregnant'] = metadata_row['is_pregnant']
-                else:
-                    df_subject['insulin_delivery_device'] = np.nan
-                    df_subject['insulin_delivery_algorithm'] = np.nan
-                    df_subject['insulin_delivery_modality'] = np.nan
-                    df_subject['cgm_device'] = np.nan
-                    df_subject['ethnicity'] = np.nan
-                    df_subject['age_of_diagnosis'] = np.nan
-                    df_subject['is_pregnant'] = np.nan
+            subject_metadata = df_metadata[df_metadata['id'] == subject_id]
+            if not subject_metadata.empty:
+                # Metadata is constant for the subject, so use the first (and only) values
+                metadata_row = subject_metadata.iloc[0]
+                df_subject['insulin_delivery_device'] = metadata_row['insulin_delivery_device']
+                df_subject['insulin_delivery_algorithm'] = metadata_row['insulin_delivery_algorithm']
+                df_subject['insulin_delivery_modality'] = metadata_row['insulin_delivery_modality']
+                df_subject['cgm_device'] = metadata_row['cgm_device']
+                df_subject['ethnicity'] = metadata_row['ethnicity']
+                df_subject['age_of_diagnosis'] = metadata_row['age_of_diagnosis']
+                df_subject['is_pregnant'] = metadata_row['is_pregnant']
+                df_subject['treatment_group'] = metadata_row['treatment_group']
+                df_subject['randomization_date'] = metadata_row['randomization_date']
+                df_subject['extension_date'] = metadata_row['extension_date']
             else:
                 df_subject['insulin_delivery_device'] = np.nan
                 df_subject['insulin_delivery_algorithm'] = np.nan
@@ -1238,7 +1227,10 @@ class Parser(BaseParser):
                 df_subject['ethnicity'] = np.nan
                 df_subject['age_of_diagnosis'] = np.nan
                 df_subject['is_pregnant'] = np.nan
-            
+                df_subject['treatment_group'] = np.nan
+                df_subject['randomization_date'] = np.nan
+                df_subject['extension_date'] = np.nan
+
             # Add insulin type data for this subject if available (block sparse - constant per subject)
             if df_insulin is not None and not df_insulin.empty:
                 subject_insulin = df_insulin[df_insulin['id'] == subject_id]
@@ -1397,6 +1389,10 @@ def main():
         # Process the data
         print(f"Loading data from: {input_path}")
         df_processed = parser(input_path)
+
+        # Filter out control group
+        df_processed = df_processed[df_processed['treatment_group'] != 'Control']
+        print("Filtered out treatment group control: ", df_processed['treatment_group'].value_counts(dropna=False))
         
         # Create output directory if it doesn't exist
         os.makedirs(os.path.dirname(output_path), exist_ok=True)

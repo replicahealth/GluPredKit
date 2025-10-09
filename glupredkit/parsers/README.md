@@ -4,12 +4,14 @@
 
 ### Overview
 
-In the iLet trial, continuous data is primarily collected for participants using the Bionic Pancreas. The control arm has limited data (11 subjects with short time horizons and substantial missing data), so we filter to include only the treatment groups in the processed data.
+In the iLet trial, continuous data is primarily collected for participants using the Bionic Pancreas. 
+
+There are 11 subjects from the control arm in the data for the Bionic Pancreas. After suggestion from Peter from JAEB, we filter out these subjects. There is very little data from these subjects, and the data is from long before extension period. Hence, it is not known whether this data was from using the iLet Bionic Pancreas.
 
 **Study Design:**
 - 66% of pediatric participants and 80% of adult participants use the Bionic Pancreas (protocol chapter 3.3)
 - Control group continues current diabetes management with Dexcom G6 (chapters 3.4 and A.2)
-- **Treatment groups:** BP (216), BPFiasp (113), Control (107) - *Control excluded from processing*
+- **Treatment groups:** BP (216), BPFiasp (113), Control (107) - 
 
 ### Data Fields
 
