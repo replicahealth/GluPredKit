@@ -15,9 +15,8 @@ import re
 class Parser(BaseParser):
     def __init__(self):
         super().__init__()
-        self.df_expanded = pd.DataFrame()
-        self.df_demographics = pd.DataFrame()
-        
+        self.df = pd.DataFrame()
+
     def __call__(self, file_path: str, *args):
         """
         Process AZT1D data from CSV files.
@@ -59,6 +58,7 @@ class Parser(BaseParser):
                 
                 # Process this subject's data
                 df_subject = self.process_subject_file(df_raw, subject_id)
+
                 if not df_subject.empty:
                     all_processed_data.append(df_subject)
                     
@@ -71,18 +71,11 @@ class Parser(BaseParser):
             df_final = pd.concat(all_processed_data, ignore_index=True)
             df_final = df_final.sort_values(['id', 'date']).reset_index(drop=True)
             
-            # Store in df_expanded
-            self.df_expanded = df_final.copy()
-            
-            # Create demographics dataframe with one row per ID
-            self.create_demographics_df()
-            
-            # Save demographics to CSV
-            self.save_demographics()
-            
-            print(f"Stored {len(self.df_expanded)} records in df_expanded")
-            print(f"Created demographics dataframe with {len(self.df_demographics)} unique subjects")
-            
+            # Store in df
+            self.df = df_final.copy()
+
+            print(f"Stored {len(self.df)} records in df")
+
             return df_final
         else:
             print("Error: No data was processed successfully!")
@@ -117,13 +110,13 @@ class Parser(BaseParser):
         for old_name, new_name in column_mapping.items():
             if old_name in df_subject.columns:
                 df_subject = df_subject.rename(columns={old_name: new_name})
-        
+
         # Convert date column to datetime
         df_subject['date'] = pd.to_datetime(df_subject['date'])
         
         # Round dates UP to next 5-minute interval (same as CTR3)
         df_subject['date'] = self.round_up_to_5min(df_subject['date'])
-        
+
         # Add subject ID
         df_subject['id'] = subject_id
         
@@ -132,60 +125,26 @@ class Parser(BaseParser):
         for col in numeric_columns:
             if col in df_subject.columns:
                 df_subject[col] = pd.to_numeric(df_subject[col], errors='coerce')
-        
-        # Replace 0.0 with NaN for relevant columns (no data vs actual zero)
-        zero_to_nan_columns = ['bolus', 'carbs', 'basal']
-        for col in zero_to_nan_columns:
-            if col in df_subject.columns:
-                df_subject[col] = df_subject[col].replace(0.0, np.nan)
-        
-        # Aggregate data within 5-minute windows (same logic as CTR3)
-        if not df_subject.empty:
-            agg_dict = {}
-            
-            # CGM: take last value in each window
-            if 'CGM' in df_subject.columns:
-                agg_dict['CGM'] = 'last'
-            
-            # Insulin and carbs: sum within each window  
-            for col in ['basal', 'bolus', 'carbs']:
-                if col in df_subject.columns:
-                    agg_dict[col] = 'sum'
-            
-            # Context and device mode: combine unique values
-            if 'DeviceMode' in df_subject.columns:
-                agg_dict['DeviceMode'] = lambda x: ', '.join(x.dropna().unique()) if not x.dropna().empty else np.nan
-            
-            if agg_dict:
-                df_subject = df_subject.groupby(['id', 'date']).agg(agg_dict).reset_index()
-                
-                # Replace 0.0 with NaN again after aggregation
-                for col in zero_to_nan_columns:
-                    if col in df_subject.columns:
-                        df_subject[col] = df_subject[col].replace(0.0, np.nan)
-        
+
         # Add missing columns with values from demographics where available
         demographics = get_subject_demographics()
         if subject_id in demographics:
             demo = demographics[subject_id]
             df_subject['age'] = demo['age']
+            df_subject['gender'] = demo['gender']
         else:
             df_subject['age'] = np.nan
-        
-        df_subject['calories_burned'] = np.nan
-        df_subject['heartrate'] = np.nan
-        df_subject['steps'] = np.nan
-        df_subject['weight'] = np.nan
-        df_subject['height'] = np.nan
+            df_subject['gender'] = np.nan
+
         df_subject['insulin_delivery_modality'] = 'AID'  # All subjects use Automated Insulin Delivery
         df_subject['insulin_delivery_device'] = 't:slim X2'  # From manuscript: Tandem t:slim X2 insulin pump
         df_subject['cgm_device'] = 'Dexcom G6'  # From manuscript: CGM devices (Dexcom G6 Pro)
         df_subject['source_file'] = 'AZT1D'
-        
+
         # Calculate total insulin (basal + bolus)
-        df_subject['insulin'] = df_subject['bolus'].fillna(0) + df_subject['basal'].fillna(0)
-        df_subject['insulin'] = df_subject['insulin'].replace(0.0, np.nan)
-        
+        df_subject['basal'] = df_subject['basal'] / 12  # From U/hr to U
+        df_subject['insulin'] = df_subject['bolus'].fillna(0) + df_subject['basal']
+
         # Set insulin delivery algorithm
         df_subject['insulin_delivery_algorithm'] = 'Control-IQ'  # From manuscript: Control IQ system
         
@@ -203,78 +162,14 @@ class Parser(BaseParser):
             df_subject['context_description_cache'] = df_subject['DeviceMode'].apply(map_device_mode)
         else:
             df_subject['context_description_cache'] = np.nan
-        
-        # Keep tag column as NaN (not used for device modes)
-        df_subject['tag'] = np.nan
-        
-        # Add empty columns to match HUPA-UCM structure (context_description_cache already populated above)
-        empty_columns = ['is_test', 'absorption_time', 'acceleration',
-                         'air_temp', 'galvanic_skin_response', 'insulin_type_basal',
-                         'insulin_type_bolus', 'is_pregnant', 'meal_label', 'scheduled_basal',
-                         'skin_temp', 'workout_duration', 'workout_intensity', 'workout_label']
-
-        for col in empty_columns:
-            df_subject[col] = np.nan
 
         # Select and order the columns to match HUPA-UCM structure exactly
-        final_columns = ['date', 'id', 'CGM', 'calories_burned', 'heartrate', 'steps', 'basal', 'bolus', 'carbs',
-                        'age', 'weight', 'height', 'insulin_delivery_modality', 'insulin',
-                         'insulin_delivery_device', 'cgm_device', 'source_file']
-        
-        # Add the populated special columns
-        special_columns = ['is_test', 'context_description_cache', 'tag', 'absorption_time', 'acceleration',
-                          'air_temp', 'galvanic_skin_response', 'insulin_delivery_algorithm', 'insulin_type_basal',
-                          'insulin_type_bolus', 'is_pregnant', 'meal_label', 'scheduled_basal',
-                          'skin_temp', 'workout_duration', 'workout_intensity', 'workout_label']
-        
-        df_subject = df_subject[final_columns + special_columns]
-        
+        final_columns = ['date', 'id', 'CGM', 'basal', 'bolus', 'carbs', 'age', 'insulin_delivery_modality', 'insulin',
+                         'gender', 'insulin_delivery_device', 'cgm_device', 'source_file', 'context_description_cache',
+                         'insulin_delivery_algorithm']
+
+        df_subject = df_subject[final_columns]
         return df_subject
-    
-    def create_demographics_df(self):
-        """Create demographics dataframe with one row per unique ID."""
-        
-        # Get unique subject IDs from processed data
-        unique_ids = self.df_expanded['id'].unique() if not self.df_expanded.empty else []
-        
-        # Get demographic data from Table 1 in manuscript
-        demographics = get_subject_demographics()
-        
-        demographics_data = []
-        for subject_id in unique_ids:
-            if subject_id in demographics:
-                demo = demographics[subject_id]
-                demographics_data.append({
-                    'id': subject_id,
-                    'gender': demo['gender'],
-                    'age_of_diagnosis': np.nan,  # Not provided in dataset
-                    'TDD': np.nan,  # Not provided in dataset
-                    'ethnicity': np.nan,  # Not provided in dataset - don't assume
-                    'source_file': 'AZT1D'
-                })
-            else:
-                demographics_data.append({
-                    'id': subject_id,
-                    'gender': np.nan,
-                    'age_of_diagnosis': np.nan,
-                    'TDD': np.nan,
-                    'ethnicity': np.nan,
-                    'source_file': 'AZT1D'
-                })
-        
-        self.df_demographics = pd.DataFrame(demographics_data)
-        self.df_demographics = self.df_demographics.sort_values('id').reset_index(drop=True)
-    
-    def save_demographics(self, output_path: str = None):
-        """Save the demographics dataframe to CSV."""
-        if output_path is None:
-            output_path = "AZT1D_demographics.csv"
-        
-        if not self.df_demographics.empty:
-            self.df_demographics.to_csv(output_path, index=False)
-            print(f"Demographics data saved to {output_path}")
-        else:
-            print("No demographics data to save. Process data first.")
 
 
 def get_dataset_info(file_path):
@@ -351,5 +246,29 @@ def get_subject_demographics():
         24: {'gender': 'Male', 'age': 74},
         25: {'gender': 'Male', 'age': 72}
     }
-    
     return demographics
+
+
+def main():
+    """Main function to run the AZT1D parser with a hard-coded file path."""
+    # Hard-coded file path - update this to your actual AZT1D dataset path
+    file_path = "data/raw/AZT1D 2025/CGM Records"
+    
+    # Create parser instance
+    parser = Parser()
+    
+    # Process the data
+    result = parser(file_path)
+    result.to_csv('data/raw/AZT1D.csv', index=False)
+    
+    if not result.empty:
+        print(f"\nProcessing completed successfully!")
+        print(f"Total records processed: {len(result)}")
+        print(f"Unique subjects: {result['id'].nunique()}")
+        print(f"Date range: {result['date'].min()} to {result['date'].max()}")
+    else:
+        print("No data was processed. Please check the file path and data format.")
+
+
+if __name__ == "__main__":
+    main()
