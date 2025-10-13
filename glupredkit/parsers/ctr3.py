@@ -2,6 +2,11 @@
 """
 CTR3 parser for processing diabetes dataset.
 Processes tab-separated files from the CTR3_Public_Dataset.
+
+Understanding the insulin delivery data here is not so intuitive, but:
+- MonitorTotalBolus: This file is a consolidation of all insulin delivered (bolus+basal), in units
+- MonitorBasalBolus: This is all the basal insulin delivered, but is called "bolus" because it shows basal insulin in Units and not in U/hr
+- MonitorMealBolus and MonitorCorrectionBolus: All actual boluses, either for a meal or a correction bolus
 """
 
 from glupredkit.parsers.base_parser import BaseParser
@@ -14,9 +19,8 @@ import glob
 class Parser(BaseParser):
     def __init__(self):
         super().__init__()
-        self.df_expanded = pd.DataFrame()
-        self.df_demographics = pd.DataFrame()
-        
+        self.df = pd.DataFrame()
+
     def __call__(self, file_path: str, *args):
         """
         Process CTR3 data from tab-separated files.
@@ -49,18 +53,10 @@ class Parser(BaseParser):
         # Process and format the merged data
         df_final = self.process_merged_data(df_merged)
         
-        # Store in df_expanded
-        self.df_expanded = df_final.copy()
-        
-        # Create demographics dataframe with one row per ID
-        self.create_demographics_df()
-        
-        # Save demographics to CSV
-        self.save_demographics()
-        
-        print(f"Stored {len(self.df_expanded)} records in df_expanded")
-        print(f"Created demographics dataframe with {len(self.df_demographics)} unique subjects")
-        
+        # Store in df
+        self.df = df_final.copy()
+
+        print(f"Stored {len(self.df)} records in df_expanded")
         return df_final
     
     def read_cgm_data(self, file_path):
@@ -92,7 +88,7 @@ class Parser(BaseParser):
         """Read bolus insulin data from MonitorMealBolus.txt and MonitorCorrectionBolus.txt"""
         meal_bolus_file = os.path.join(file_path, "MonitorMealBolus.txt")
         correction_bolus_file = os.path.join(file_path, "MonitorCorrectionBolus.txt")
-        
+
         bolus_data = []
         
         # Read meal bolus data
@@ -241,12 +237,7 @@ class Parser(BaseParser):
         for col in zero_to_nan_columns:
             if col in df_processed.columns:
                 df_processed[col] = df_processed[col].replace(0.0, np.nan)
-        
-        # Add missing columns to match HUPA-UCM structure
-        df_processed['calories_burned'] = np.nan
-        df_processed['heartrate'] = np.nan
-        df_processed['steps'] = np.nan
-        
+
         # Add weight, height, age, and insulin types from enrollment data (block sparse per subject)
         enrollment_data = self.load_enrollment_data()
         df_processed['age'] = np.nan
@@ -271,7 +262,11 @@ class Parser(BaseParser):
                     
                     # Age at enrollment
                     age_at_enrollment = pd.to_numeric(row.get('Age at Enrollment'), errors='coerce')
-                    
+
+                    gender = 'Male' if row.get('Gender') == 'M' else ('Female' if row.get('Gender') == 'F' else np.nan)
+                    age_of_diagnosis = pd.to_numeric(row.get('Age at Diagnosis'), errors='coerce')
+                    ethnicity = row.get('Race')
+
                     # Determine insulin type based on enrollment data
                     insulin_type = np.nan
                     if pd.notna(row.get('Novolog')) and row.get('Novolog') == 1.0:
@@ -283,7 +278,7 @@ class Parser(BaseParser):
                     elif pd.notna(row.get('Apidra')) and row.get('Apidra') == 1.0:
                         insulin_type = 'Apidra'
                     elif pd.notna(row.get('InsTypeOther')) and row.get('InsTypeOther') == 1.0:
-                        insulin_type = 'Other'
+                        insulin_type = np.nan
                     
                     # Set weight, height, age, and insulin types for all records of this subject
                     df_processed.loc[df_processed['id'] == subject_id, 'weight'] = weight_lbs
@@ -291,38 +286,24 @@ class Parser(BaseParser):
                     df_processed.loc[df_processed['id'] == subject_id, 'age'] = age_at_enrollment
                     df_processed.loc[df_processed['id'] == subject_id, 'insulin_type_basal'] = insulin_type
                     df_processed.loc[df_processed['id'] == subject_id, 'insulin_type_bolus'] = insulin_type
+                    df_processed.loc[df_processed['id'] == subject_id, 'gender'] = gender
+                    df_processed.loc[df_processed['id'] == subject_id, 'age_of_diagnosis'] = age_of_diagnosis
+                    df_processed.loc[df_processed['id'] == subject_id, 'ethnicity'] = ethnicity
+
         df_processed['insulin_delivery_modality'] = 'AID'
-        df_processed['insulin_delivery_device'] = 't:slim X2'
+        df_processed['insulin_delivery_device'] = 'Roche Accu-Check'
+        df_processed['insulin_delivery_algorithm'] = 'JAEB DiA Control-to-Range'
         df_processed['cgm_device'] = 'Dexcom G4 Platinum'
         df_processed['source_file'] = 'CTR3'
         
         # Calculate total insulin (basal + bolus)
-        df_processed['insulin'] = df_processed['bolus'].fillna(0) + df_processed['basal'].fillna(0)
-        df_processed['insulin'] = df_processed['insulin'].replace(0.0, np.nan)
-        
-        # Add empty columns to match HUPA-UCM structure (excluding insulin types which are set above)
-        empty_columns = ['is_test', 'context_description_cache', 'tag', 'absorption_time', 'acceleration',
-                         'air_temp', 'galvanic_skin_response', 'insulin_delivery_algorithm',
-                         'is_pregnant', 'meal_label', 'scheduled_basal',
-                         'skin_temp', 'workout_duration', 'workout_intensity', 'workout_label']
-
-        for col in empty_columns:
-            df_processed[col] = np.nan
-        
+        df_processed['insulin'] = df_processed['bolus'].fillna(0) + df_processed['basal']
 
         # Select and order the columns to match HUPA-UCM structure exactly
-        final_columns = ['date', 'id', 'CGM', 'calories_burned', 'heartrate', 'steps', 'basal', 'bolus', 'carbs',
-                        'age', 'weight', 'height', 'insulin_delivery_modality', 'insulin',
-                         'insulin_delivery_device', 'cgm_device', 'source_file']
-        
-        # Add the special columns
-        special_columns = ['is_test', 'context_description_cache', 'tag', 'absorption_time', 'acceleration',
-                          'air_temp', 'galvanic_skin_response', 'insulin_delivery_algorithm', 'insulin_type_basal',
-                          'insulin_type_bolus', 'is_pregnant', 'meal_label', 'scheduled_basal',
-                          'skin_temp', 'workout_duration', 'workout_intensity', 'workout_label']
-        
-        df_processed = df_processed[final_columns + special_columns]
-        
+        final_columns = ['date', 'id', 'CGM', 'basal', 'bolus', 'carbs', 'age', 'weight', 'height',
+                         'insulin_delivery_modality', 'insulin', 'insulin_delivery_device', 'cgm_device', 'source_file',
+                         'insulin_type_basal', 'insulin_type_bolus', 'gender', 'age_of_diagnosis', 'ethnicity']
+        df_processed = df_processed[final_columns]
         return df_processed.sort_values(['id', 'date']).reset_index(drop=True)
     
     def create_demographics_df(self):
@@ -416,3 +397,28 @@ def get_dataset_info(file_path):
             print(f"Error reading CGM file: {e}")
     
     return info
+
+
+def main():
+    """Main function to run the AZT1D parser with a hard-coded file path."""
+    # Hard-coded file path - update this to your actual AZT1D dataset path
+    file_path = "data/raw/CTR3_Public_Dataset/Data Tables"
+
+    # Create parser instance
+    parser = Parser()
+
+    # Process the data
+    result = parser(file_path)
+    result.to_csv('data/raw/CTR3.csv', index=False)
+
+    if not result.empty:
+        print(f"\nProcessing completed successfully!")
+        print(f"Total records processed: {len(result)}")
+        print(f"Unique subjects: {result['id'].nunique()}")
+        print(f"Date range: {result['date'].min()} to {result['date'].max()}")
+    else:
+        print("No data was processed. Please check the file path and data format.")
+
+
+if __name__ == "__main__":
+    main()

@@ -15,9 +15,8 @@ import re
 class Parser(BaseParser):
     def __init__(self):
         super().__init__()
-        self.df_expanded = pd.DataFrame()
-        self.df_demographics = pd.DataFrame()
-        
+        self.df = pd.DataFrame()
+
     def __call__(self, file_path: str, *args):
         """
         Process HUPA-UCM data from preprocessed CSV files.
@@ -69,17 +68,9 @@ class Parser(BaseParser):
             df_final = df_final.sort_values(['id', 'date']).reset_index(drop=True)
             
             # Store in df_expanded
-            self.df_expanded = df_final.copy()
-            
-            # Create demographics dataframe with one row per ID
-            self.create_demographics_df()
-            
-            # Save demographics to CSV
-            self.save_demographics()
-            
-            print(f"Stored {len(self.df_expanded)} records in df_expanded")
-            print(f"Created demographics dataframe with {len(self.df_demographics)} unique subjects")
-            
+            self.df = df_final.copy()
+
+            print(f"Stored {len(self.df)} records in df_expanded")
             return df_final
         else:
             print("Error: No data was processed successfully!")
@@ -137,6 +128,8 @@ class Parser(BaseParser):
             df_subject['height'] = demo['height']  # Already converted to feet
             df_subject['insulin_delivery_modality'] = demo['insulin_delivery']
             df_subject['insulin_delivery_device'] = demo['insulin_delivery_device']
+            df_subject['gender'] = demo['gender']
+            df_subject['age_of_diagnosis'] = demo['age'] - demo['dx_time']
         else:
             # Default values if demographic data is missing
             df_subject['age'] = np.nan
@@ -144,69 +137,20 @@ class Parser(BaseParser):
             df_subject['height'] = np.nan
             df_subject['insulin_delivery_modality'] = np.nan
             df_subject['insulin_delivery_device'] = np.nan
+            df_subject['gender'] = np.nan
+            df_subject['age_of_diagnosis'] = np.nan
 
         df_subject['source_file'] = 'HUPA-UCM'
         df_subject['cgm_device'] = 'FreeStyle Libre 2'
         df_subject['insulin'] = df_subject['bolus'].fillna(0) + df_subject['basal']
 
-        empty_columns = ['is_test', 'context_description_cache', 'tag', 'absorption_time', 'acceleration',
-                         'air_temp', 'galvanic_skin_response', 'insulin_delivery_algorithm', 'insulin_type_basal',
-                         'insulin_type_bolus', 'is_pregnant', 'meal_label', 'scheduled_basal',
-                         'skin_temp', 'workout_duration', 'workout_intensity', 'workout_label']
-
-        for col in empty_columns:
-            df_subject[col] = np.nan
-
         # Select and order the columns we want (excluding gender and age_of_diagnosis)
         final_columns = ['date', 'id', 'CGM', 'calories_burned', 'heartrate', 'steps', 'basal', 'bolus', 'carbs',
                          'age', 'weight', 'height', 'insulin_delivery_modality', 'insulin',
-                         'insulin_delivery_device', 'cgm_device', 'source_file']
-        df_subject = df_subject[final_columns + empty_columns]
+                         'insulin_delivery_device', 'cgm_device', 'source_file', 'gender', 'age_of_diagnosis']
+        df_subject = df_subject[final_columns]
         
         return df_subject
-    
-    def create_demographics_df(self):
-        """Create demographics dataframe with one row per unique ID."""
-        demographics = get_subject_demographics()
-        
-        # Get unique subject IDs from processed data
-        unique_ids = self.df_expanded['id'].unique() if not self.df_expanded.empty else []
-        
-        demographics_data = []
-        for subject_id in unique_ids:
-            if subject_id in demographics:
-                demo = demographics[subject_id]
-                demographics_data.append({
-                    'id': subject_id,
-                    'gender': demo['gender'],
-                    'age_of_diagnosis': demo['age'] - demo['dx_time'],
-                    'TDD': np.nan,
-                    'ethnicity': 'White',
-                    'source_file': 'HUPA-UCM'
-                })
-            else:
-                demographics_data.append({
-                    'id': subject_id,
-                    'gender': np.nan,
-                    'age_of_diagnosis': np.nan,
-                    'TDD': np.nan,
-                    'ethnicity': 'White',
-                    'source_file': 'HUPA-UCM'
-                })
-        
-        self.df_demographics = pd.DataFrame(demographics_data)
-        self.df_demographics = self.df_demographics.sort_values('id').reset_index(drop=True)
-    
-    def save_demographics(self, output_path: str = None):
-        """Save the demographics dataframe to CSV."""
-        if output_path is None:
-            output_path = "HUPA_UCM_demographics.csv"
-        
-        if not self.df_demographics.empty:
-            self.df_demographics.to_csv(output_path, index=False)
-            print(f"Demographics data saved to {output_path}")
-        else:
-            print("No demographics data to save. Process data first.")
 
 
 def get_subject_demographics():
@@ -288,3 +232,28 @@ def get_dataset_info(file_path):
     info['unique_subjects'] = len(set(info['subjects']))
     
     return info
+
+
+def main():
+    """Main function to run the AZT1D parser with a hard-coded file path."""
+    # Hard-coded file path - update this to your actual AZT1D dataset path
+    file_path = "data/raw/HUPA-UCM Diabetes Dataset/Preprocessed"
+
+    # Create parser instance
+    parser = Parser()
+
+    # Process the data
+    result = parser(file_path)
+    result.to_csv('data/raw/HUPA-UCM.csv', index=False)
+
+    if not result.empty:
+        print(f"\nProcessing completed successfully!")
+        print(f"Total records processed: {len(result)}")
+        print(f"Unique subjects: {result['id'].nunique()}")
+        print(f"Date range: {result['date'].min()} to {result['date'].max()}")
+    else:
+        print("No data was processed. Please check the file path and data format.")
+
+
+if __name__ == "__main__":
+    main()
