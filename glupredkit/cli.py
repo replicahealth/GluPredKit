@@ -140,11 +140,13 @@ def parse(parser, username, password, start_date, file_path, end_date, output_fi
             folder_1 = os.path.join(file_path, 'T1DEXI.zip')
             parsed_data_1 = chosen_parser(file_path=folder_1)
             parsed_data_1 = helpers.add_is_test_column(parsed_data_1, test_size)
+            parsed_data_1['source_file'] = 'T1DEXI'
             save_data(output_file_name="T1DEXI", data=parsed_data_1)
 
             folder_2 = os.path.join(file_path, 'T1DEXIP.zip')
             parsed_data_2 = chosen_parser(file_path=folder_2)
             parsed_data_2 = helpers.add_is_test_column(parsed_data_2, test_size)
+            parsed_data_2['source_file'] = 'T1DEXIP'
             save_data(output_file_name="T1DEXIP", data=parsed_data_2)
             return
     elif parser in ['open_aps']:

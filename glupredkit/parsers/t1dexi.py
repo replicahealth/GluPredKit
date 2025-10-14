@@ -30,16 +30,19 @@ class Parser(BaseParser):
         """
         print(f"Processing data from {file_path}")
         self.subject_ids = get_valid_subject_ids(file_path)
-        df_glucose, df_meals, df_bolus, df_basal, df_exercise, heartrate_dict, steps_or_cal_burn_dict = self.get_dataframes(file_path)
-        df_resampled = self.resample_data(df_glucose, df_meals, df_bolus, df_basal, df_exercise, heartrate_dict, steps_or_cal_burn_dict)
+        (df_glucose, df_meals, df_bolus, df_basal, df_exercise, heartrate_dict, height_dict, weight_dict,
+         steps_or_cal_burn_dict) = self.get_dataframes(file_path)
+        df_resampled = self.resample_data(df_glucose, df_meals, df_bolus, df_basal, df_exercise, heartrate_dict,
+                                          steps_or_cal_burn_dict)
         
         # Add demographics and metadata columns
         print("Adding demographics and metadata columns...")
-        df_resampled = self.add_metadata_columns(df_resampled, file_path)
+        df_resampled = self.add_metadata_columns(df_resampled, height_dict, weight_dict, file_path)
         
         return df_resampled
 
-    def resample_data(self, df_glucose, df_meals, df_bolus, df_basal, df_exercise, heartrate_dict, steps_or_cal_burn_dict):
+    def resample_data(self, df_glucose, df_meals, df_bolus, df_basal, df_exercise, heartrate_dict,
+                      steps_or_cal_burn_dict):
         # There are 88 subjects on MDI in the dataset --> 502 - 88 = 414. In the youth version: 261 - 37 = 224.
         # Total: 763 with, 638 without MDI
         # We use only the subjects not on MDI in this parser
@@ -138,6 +141,9 @@ class Parser(BaseParser):
             count += 1
 
         df_final = pd.concat(processed_dfs)
+
+        df_final['insulin'] = df_final['bolus'].fillna(0) + df_final['basal']
+
         return df_final
 
     def get_dataframes(self, file_path):
@@ -157,14 +163,17 @@ class Parser(BaseParser):
         print("Basal data processed", df_basal)
         df_exercise = get_df_exercise(file_path, self.subject_ids)
         print("Exercise data processed", df_exercise)
-        heartrate_dict = get_heartrate_dict(file_path, self.subject_ids)
+        heartrate_dict, height_dict, weight_dict = get_vital_sign_dicts(file_path, self.subject_ids)
         print("Heartrate dict processed", heartrate_dict[self.subject_ids[0]])
+        print("Height dict processed", height_dict[self.subject_ids[0]])
+        print("Weight dict processed", weight_dict[self.subject_ids[0]])
         steps_or_cal_burn_dict = get_steps_or_cal_burn_dict(file_path, self.subject_ids)
         print("Steps or calories burned dict processed", steps_or_cal_burn_dict[self.subject_ids[0]])
 
-        return df_glucose, df_meals, df_bolus, df_basal, df_exercise, heartrate_dict, steps_or_cal_burn_dict
+        return (df_glucose, df_meals, df_bolus, df_basal, df_exercise, heartrate_dict, height_dict, weight_dict,
+                steps_or_cal_burn_dict)
 
-    def add_metadata_columns(self, df, file_path):
+    def add_metadata_columns(self, df, height_dict, weight_dict, file_path):
         """Add demographics and metadata columns to the processed dataframe"""
         
         # Determine if this is T1DEXIP dataset
@@ -197,16 +206,30 @@ class Parser(BaseParser):
             subject_demographics = demographics.get(subject_id, {})
             subject_device = device_info.get(subject_id, '')
             subject_age_data = age_diagnosis_data.get(subject_id, {})
-            
+            height_data = height_dict.get(subject_id)
+            weight_data = weight_dict.get(subject_id)
+
+            height = np.nan
+            weight = np.nan
+            if height_data is None:
+                print(f"Warning: Subject id '{subject_id}' does not exist for height!")
+            else:
+                height = height_data['height'].mean()
+            if weight_data is None:
+                print(f"Warning: Subject id '{subject_id}' does not exist for weight!")
+            else:
+                weight = weight_data['weight'].mean()
+
             # Basic demographics
             age = subject_demographics.get('age')
             race = subject_demographics.get('race')
             ethnic = subject_demographics.get('ethnic')
+            treatment_group = subject_demographics.get('arm')
             
             # Process insulin delivery information
             normalized_device, algorithm = normalize_device_name_and_get_algorithm(subject_device)
             modality = categorize_insulin_delivery_modality(subject_device)
-            cgm_device = get_cgm_for_insulin_device(subject_device)
+            cgm_device = 'Dexcom G6'  # All users were on Dexcom G6 from the T1DEXI paper
             
             # Process ethnicity
             ethnicity = standardize_ethnicity(race, ethnic)
@@ -237,14 +260,21 @@ class Parser(BaseParser):
                 'insulin_delivery_modality': modality,
                 'cgm_device': cgm_device,
                 'ethnicity': ethnicity,
+                'age': age,
                 'age_of_diagnosis': diagnosis_age,
                 'insulin_type_bolus': bolus_insulin,
                 'insulin_type_basal': basal_insulin,
-                'is_pregnant': np.nan  # No pregnancy data found in original files
+                'is_pregnant': np.nan,  # No pregnancy data found in original files
+                'height': height,
+                'weight': weight,
+                'treatment_group': treatment_group,
             })
         
         # Create metadata DataFrame
         df_metadata = pd.DataFrame(metadata_records)
+
+        print("METADATA")
+        print(df_metadata)
         
         # Merge metadata with main dataframe
         df = df.merge(df_metadata, on='id', how='left')
@@ -259,49 +289,6 @@ class Parser(BaseParser):
         print(f"Real insulin data found for {insulin_count}/{len(unique_subjects)} subjects")
         
         return df
-
-
-# ======= DEMOGRAPHICS AND METADATA FUNCTIONS =======
-
-def get_cgm_for_insulin_device(insulin_device):
-    """Map CGM device based on insulin delivery system compatibility"""
-    
-    if pd.isna(insulin_device) or insulin_device == '':
-        return 'Unknown'
-    
-    device_str = str(insulin_device).upper()
-    
-    # Tandem systems typically use Dexcom CGM
-    if 'TANDEM' in device_str and 'CONTROL IQ' in device_str:
-        return 'DEXCOM G6'  # Control-IQ requires Dexcom G6
-    elif 'TANDEM' in device_str and 'BASAL IQ' in device_str:
-        return 'DEXCOM G6'  # Basal-IQ also uses Dexcom G6
-    elif 'TANDEM' in device_str:
-        return 'DEXCOM G6'  # Most Tandem pumps in these studies likely use Dexcom
-    
-    # Medtronic systems use Guardian CGM
-    elif 'MEDTRONIC' in device_str and 'AUTO MODE' in device_str:
-        if '670G' in device_str:
-            return 'MEDTRONIC GUARDIAN SENSOR 3'
-        elif '770G' in device_str:
-            return 'MEDTRONIC GUARDIAN SENSOR 3'
-        else:
-            return 'MEDTRONIC GUARDIAN'
-    elif 'MEDTRONIC' in device_str:
-        return 'MEDTRONIC GUARDIAN'
-    
-    # Omnipod systems
-    elif 'OMNIPOD 5' in device_str:
-        return 'DEXCOM G6'  # Omnipod 5 integrates with Dexcom G6
-    elif 'OMNIPOD' in device_str:
-        return 'Unknown'  # Older Omnipod systems don't have integrated CGM
-    
-    # Multiple daily injections - could use any CGM
-    elif 'MULTIPLE DAILY INJECTIONS' in device_str:
-        return 'Unknown'  # MDI patients could use any CGM or none
-    
-    else:
-        return 'Unknown'
 
 
 def standardize_ethnicity(race, ethnic):
@@ -567,7 +554,7 @@ def extract_insulin_data_from_cm(file_path, use_deflate64=False):
     try:
         if use_deflate64:
             with zipfile_deflate64.ZipFile(file_path, 'r') as zip_file:
-                cm_files = [f for f in zip_file.namelist() if f.endswith('CM.xpt')]
+                cm_files = [f for f in zip_file.namelist() if f.endswith('/CM.xpt')]
                 
                 if cm_files:
                     with zip_file.open(cm_files[0]) as xpt_file:
@@ -575,7 +562,7 @@ def extract_insulin_data_from_cm(file_path, use_deflate64=False):
         else:
             with zipfile.ZipFile(file_path, 'r') as z:
                 with tempfile.TemporaryDirectory() as temp_dir:
-                    cm_files = [f for f in z.namelist() if f.endswith('CM.xpt')]
+                    cm_files = [f for f in z.namelist() if f.endswith('/CM.xpt')]
                     
                     if cm_files:
                         z.extract(cm_files[0], temp_dir)
@@ -629,8 +616,8 @@ def extract_age_diagnosis_data(file_path, is_t1dexip=False):
                     xpt_files = [f for f in z.namelist() if f.endswith('.xpt')]
                     
                     # Check DM.xpt for basic demographics
-                    dm_files = [f for f in xpt_files if f.endswith('DM.xpt')]
-                    suppdm_files = [f for f in xpt_files if f.endswith('SUPPDM.xpt')]
+                    dm_files = [f for f in xpt_files if f.endswith('/DM.xpt')]
+                    suppdm_files = [f for f in xpt_files if f.endswith('/SUPPDM.xpt')]
                     
                     if dm_files:
                         z.extract(dm_files[0], temp_dir)
@@ -696,8 +683,8 @@ def extract_age_diagnosis_data(file_path, is_t1dexip=False):
                 xpt_files = [f for f in zip_file.namelist() if f.endswith('.xpt')]
                 
                 # Check DM.xpt for basic demographics
-                dm_files = [f for f in xpt_files if f.endswith('DM.xpt')]
-                suppdm_files = [f for f in xpt_files if f.endswith('SUPPDM.xpt')]
+                dm_files = [f for f in xpt_files if f.endswith('/DM.xpt')]
+                suppdm_files = [f for f in xpt_files if f.endswith('/SUPPDM.xpt')]
                 
                 if dm_files:
                     with zip_file.open(dm_files[0]) as xpt_file:
@@ -801,7 +788,7 @@ def get_demographics_data(file_path, is_t1dexip=False):
         if is_t1dexip:
             with zipfile.ZipFile(file_path, 'r') as z:
                 with tempfile.TemporaryDirectory() as temp_dir:
-                    dm_files = [f for f in z.namelist() if f.endswith('DM.xpt')]
+                    dm_files = [f for f in z.namelist() if f.endswith('/DM.xpt')]
                     
                     if dm_files:
                         dm_file = dm_files[0]
@@ -820,14 +807,19 @@ def get_demographics_data(file_path, is_t1dexip=False):
                         
                         for idx, row in df.iterrows():
                             patient_id = row['USUBJID']
+                            gender_map = {'M': 'Male', 'F': 'Female'}
+                            gender = gender_map.get(row['SEX']) if pd.notna(row['SEX']) else None
+
                             demographics[patient_id] = {
                                 'age': row.get('AGE'),
+                                'gender': gender,
                                 'race': row.get('RACE'),
-                                'ethnic': row.get('ETHNIC')
+                                'ethnic': row.get('ETHNIC'),
+                                'arm': row.get('ARM')
                             }
         else:
             with zipfile_deflate64.ZipFile(file_path, 'r') as zip_file:
-                dm_files = [f for f in zip_file.namelist() if f.endswith('DM.xpt')]
+                dm_files = [f for f in zip_file.namelist() if f.endswith('/DM.xpt')]
                 
                 if dm_files:
                     dm_file = dm_files[0]
@@ -837,10 +829,15 @@ def get_demographics_data(file_path, is_t1dexip=False):
                     
                     for idx, row in df.iterrows():
                         patient_id = row['USUBJID']
+                        gender_map = {'M': 'Male', 'F': 'Female'}
+                        gender = gender_map.get(row['SEX']) if pd.notna(row['SEX']) else None
+
                         demographics[patient_id] = {
                             'age': row.get('AGE'),
+                            'gender': gender,
                             'race': row.get('RACE'),
-                            'ethnic': row.get('ETHNIC')
+                            'ethnic': row.get('ETHNIC'),
+                            'arm': row.get('ARM')
                         }
     
     except Exception as e:
@@ -873,16 +870,17 @@ def get_valid_subject_ids(file_path):
     df_device = get_df_from_zip_deflate_64(file_path, 'DX.xpt')
     #subject_ids_not_on_mdi = df_device[df_device['DXTRT'] != 'MULTIPLE DAILY INJECTIONS']['USUBJID'].unique()
     print("ALL SUBJECTS ARE INCLUDED")
-    subject_ids_not_on_mdi = df_device['USUBJID'].unique()
-    return subject_ids_not_on_mdi
+    return df_device['USUBJID'].unique()
 
 
-def get_heartrate_dict(file_path, subject_ids):
+def get_vital_sign_dicts(file_path, subject_ids):
     # Heartrate data is processed by chunks because the heartrate file is so big and creates memory problems
     row_count = 0
     chunksize = 1000000
-    file_name = 'VS.xpt'
+    file_name = '/VS.xpt'
     heartrate_dict = {}
+    height_dict = {}
+    weight_dict = {}
 
     with zipfile_deflate64.ZipFile(file_path, 'r') as zip_file:
         matched_files = [f for f in zip_file.namelist() if f.endswith(file_name)]
@@ -890,11 +888,11 @@ def get_heartrate_dict(file_path, subject_ids):
         with zip_file.open(matched_file) as xpt_file:
             for chunk in pd.read_sas(xpt_file, format='xport', chunksize=chunksize):
                 row_count += chunksize
-                df_heartrate = chunk.map(lambda x: x.decode() if isinstance(x, bytes) else x)
+                df = chunk.map(lambda x: x.decode() if isinstance(x, bytes) else x)
 
                 # For some reason, the heart rate mean gives more data in T1DEXI version, while not in T1DEXIP
                 # The heart rate from both devices in the study
-                df_heartrate = df_heartrate[(df_heartrate['VSTEST'] == 'Heart Rate') | (df_heartrate['VSTEST'] == 'Heart Rate, Mean')]
+                df_heartrate = df[(df['VSTEST'] == 'Heart Rate') | (df['VSTEST'] == 'Heart Rate, Mean')]
 
                 # Filter the DataFrame for subject_ids before looping over unique values
                 df_heartrate = df_heartrate[df_heartrate['USUBJID'].isin(subject_ids)]
@@ -914,7 +912,41 @@ def get_heartrate_dict(file_path, subject_ids):
                     else:
                         # Otherwise, create a new DataFrame for this USUBJID
                         heartrate_dict[subject_id] = filtered_rows
-            return heartrate_dict
+
+                # Do the same for height
+                df_height = df[df['VSTEST'] == 'Height']
+                df_height = df_height[df_height['USUBJID'].isin(subject_ids)]
+
+                for subject_id in df_height['USUBJID'].unique():
+                    filtered_rows = df_height[df_height['USUBJID'] == subject_id].copy()
+                    filtered_rows.loc[:, 'VSSTRESN'] = pd.to_numeric(filtered_rows['VSSTRESN'])
+                    filtered_rows.rename(columns={'VSSTRESN': 'height'}, inplace=True)
+                    filtered_rows['height'] = filtered_rows['height'] / 12  # From inches to feet
+
+                    # If the USUBJID is already in the dictionary, append the new data
+                    if subject_id in height_dict:
+                        height_dict[subject_id] = pd.concat([height_dict[subject_id], filtered_rows])
+                    else:
+                        # Otherwise, create a new DataFrame for this USUBJID
+                        height_dict[subject_id] = filtered_rows
+
+                # Do the same for weight
+                df_weight = df[df['VSTEST'] == 'Weight']
+                df_weight = df_weight[df_weight['USUBJID'].isin(subject_ids)]
+
+                for subject_id in df_height['USUBJID'].unique():
+                    filtered_rows = df_weight[df_weight['USUBJID'] == subject_id].copy()
+                    filtered_rows.loc[:, 'VSSTRESN'] = pd.to_numeric(filtered_rows['VSSTRESN'])
+                    filtered_rows.rename(columns={'VSSTRESN': 'weight'}, inplace=True)
+
+                    # If the USUBJID is already in the dictionary, append the new data
+                    if subject_id in weight_dict:
+                        weight_dict[subject_id] = pd.concat([weight_dict[subject_id], filtered_rows])
+                    else:
+                        # Otherwise, create a new DataFrame for this USUBJID
+                        weight_dict[subject_id] = filtered_rows
+
+            return heartrate_dict, height_dict, weight_dict
 
 
 def get_steps_or_cal_burn_dict(file_path, subject_ids):
@@ -1009,14 +1041,19 @@ def get_df_bolus(df_insulin):
     new_rows = []
     for _, row in extended_boluses.iterrows():
         new_rows.extend(split_duration(row, 'extended bolus'))
-    extended_boluses = pd.DataFrame(new_rows)
-    extended_boluses.drop(columns=['duration'], inplace=True)
 
-    columns = ['date', 'dose', 'id']
-    extended_boluses.rename(columns={'extended bolus': 'dose'}, inplace=True)
-    merged_bolus_df = pd.concat([df_bolus[columns], extended_boluses[columns]], ignore_index=True)
+    # Only create extended_boluses DataFrame if there are new rows
+    if new_rows:
+        extended_boluses = pd.DataFrame(new_rows)
+        extended_boluses.drop(columns=['duration'], inplace=True)
+        extended_boluses.rename(columns={'extended bolus': 'dose'}, inplace=True)
+        merged_bolus_df = pd.concat([df_bolus[['date', 'dose', 'id']], extended_boluses[['date', 'dose', 'id']]], ignore_index=True)
+    else:
+        merged_bolus_df = df_bolus[['date', 'dose', 'id']].copy()
+
     merged_bolus_df.rename(columns={'dose': 'bolus'}, inplace=True)
     merged_bolus_df.set_index('date', inplace=True)
+
     return merged_bolus_df
 
 
@@ -1039,7 +1076,7 @@ def get_df_basal(df_insulin):
         new_rows.extend(split_duration(row, 'dose'))
     df_basal = pd.DataFrame(new_rows)
     df_basal.drop(columns=['duration'], inplace=True)
-    df_basal['dose'] = df_basal['dose'] * 12  # Convert to U/hr
+    df_basal['dose'] = df_basal['dose']  # Basal in absolute U
     df_basal.set_index('date', inplace=True)
     df_basal.rename(columns={'dose': 'basal'}, inplace=True)
     return df_basal
