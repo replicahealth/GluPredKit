@@ -34,11 +34,11 @@ class Parser(BaseParser):
          steps_or_cal_burn_dict) = self.get_dataframes(file_path)
         df_resampled = self.resample_data(df_glucose, df_meals, df_bolus, df_basal, df_exercise, heartrate_dict,
                                           steps_or_cal_burn_dict)
-        
+
         # Add demographics and metadata columns
         print("Adding demographics and metadata columns...")
         df_resampled = self.add_metadata_columns(df_resampled, height_dict, weight_dict, file_path)
-        
+
         return df_resampled
 
     def resample_data(self, df_glucose, df_meals, df_bolus, df_basal, df_exercise, heartrate_dict,
@@ -222,6 +222,7 @@ class Parser(BaseParser):
 
             # Basic demographics
             age = subject_demographics.get('age')
+            gender = subject_demographics.get('gender')
             race = subject_demographics.get('race')
             ethnic = subject_demographics.get('ethnic')
             treatment_group = subject_demographics.get('arm')
@@ -261,6 +262,7 @@ class Parser(BaseParser):
                 'cgm_device': cgm_device,
                 'ethnicity': ethnicity,
                 'age': age,
+                'gender': gender,
                 'age_of_diagnosis': diagnosis_age,
                 'insulin_type_bolus': bolus_insulin,
                 'insulin_type_basal': basal_insulin,
@@ -273,10 +275,11 @@ class Parser(BaseParser):
         # Create metadata DataFrame
         df_metadata = pd.DataFrame(metadata_records)
 
-        print("METADATA")
-        print(df_metadata)
-        
+        print("Treatment_groups:", df_metadata['treatment_group'].value_counts(dropna=False))
+        print("Gender:", df_metadata['gender'].value_counts(dropna=False))
+
         # Merge metadata with main dataframe
+        df = df.reset_index()
         df = df.merge(df_metadata, on='id', how='left')
         
         print(f"Added metadata columns for {len(unique_subjects)} subjects")
