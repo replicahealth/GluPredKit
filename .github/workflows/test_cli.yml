@@ -30,8 +30,11 @@ jobs:
         if: ${{ runner.os != 'Windows' }}
         run: echo "CFLAGS=-std=gnu99" >> $GITHUB_ENV
 
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libcairo2-dev
+      - name: Install system dependencies (Ubuntu only)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev
 
       - name: Install test dependencies
         run: |
