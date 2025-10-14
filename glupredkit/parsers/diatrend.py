@@ -22,13 +22,12 @@ class Parser(BaseParser):
         
         # Load data from different sources
         df_glucose = self.load_cgm_data(file_path)
-        df_bolus = self.load_bolus_data(file_path)
+        df_bolus_and_carbs = self.load_bolus_and_carbs_data(file_path)
         df_basal = self.load_basal_data(file_path)
         df_demographics = self.load_demographics_data(file_path)
-        df_meal_labels = self.load_meal_data(file_path)
-        
+
         # Resample and merge data
-        df_resampled = self.resample_data(df_glucose, df_bolus, df_basal, df_demographics, df_meal_labels)
+        df_resampled = self.resample_data(df_glucose, df_bolus_and_carbs, df_basal, df_demographics)
         
         return df_resampled
 
@@ -121,7 +120,7 @@ class Parser(BaseParser):
             print(f"Error loading CGM data: {e}")
             return pd.DataFrame()
 
-    def load_bolus_data(self, file_path):
+    def load_bolus_and_carbs_data(self, file_path):
         """
         Load and process bolus insulin data from DiaTrend Excel files.
         Only includes subjects with CGM, Bolus, and Basal sheets.
@@ -561,7 +560,7 @@ class Parser(BaseParser):
             print(f"Error loading demographics data: {e}")
             return pd.DataFrame()
 
-    def resample_data(self, df_glucose, df_bolus, df_basal, df_demographics, df_meal_labels):
+    def resample_data(self, df_glucose, df_bolus_and_carbs, df_basal, df_demographics):
         """
         Resample and merge all dataframes into a unified time grid.
         CGM values are resampled to 5-minute intervals using mean.
@@ -597,8 +596,8 @@ class Parser(BaseParser):
             df_subject['id'] = subject_id
             
             # Process bolus data for this subject if available
-            if not df_bolus.empty:
-                df_subject_bolus = df_bolus[df_bolus['id'] == subject_id].copy()
+            if not df_bolus_and_carbs.empty:
+                df_subject_bolus = df_bolus_and_carbs[df_bolus_and_carbs['id'] == subject_id].copy()
                 
                 if not df_subject_bolus.empty:
                     # Sum bolus and carb doses for each 5-minute interval
