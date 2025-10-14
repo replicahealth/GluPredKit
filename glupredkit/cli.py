@@ -162,6 +162,7 @@ def parse(parser, username, password, start_date, file_path, end_date, output_fi
             for prefix in ['HCL150', 'SAP100', 'PA50']:
                 parsed_data = chosen_parser(prefix, file_path=file_path)
                 output_file_name = f"Tidepool-JDRF-{prefix}"
+                parsed_data['source_file'] = output_file_name
                 save_data(output_file_name=output_file_name, data=parsed_data)
 
             # Already split into train and test data

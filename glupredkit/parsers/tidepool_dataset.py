@@ -118,7 +118,8 @@ class Parser(BaseParser):
             df = pd.merge(df, df_workout_duration, on="date", how='outer')
             df = pd.merge(df, df_calories_burned, on="date", how='outer')
 
-        df['insulin'] = df['bolus'] + df['basal'] / 12
+        df['basal'] = df['basal'] / 12
+        df['insulin'] = df['bolus'].fillna(0) + df['basal']
 
         # Ensuring homogenous time intervals
         df.sort_index(inplace=True)
@@ -212,7 +213,7 @@ class Parser(BaseParser):
         for carb_col in ['nutrition.carbohydrate.net', 'carbInput']:
             if carb_col in df.columns:
                 df_carbs = df[df['type'] == 'food'][['date', carb_col]]
-                df_carbs.rename(columns={"nutrition.carbohydrate.net": "carbs"}, inplace=True)
+                df_carbs.rename(columns={carb_col: "carbs"}, inplace=True)
                 carb_dfs += [df_carbs]
 
         if len(carb_dfs) == 0:
@@ -322,8 +323,8 @@ def get_age_and_diagnosis(file_path, prefix, subject_id):
     age = subject_data['ageStart'].iloc[0]
     gender = subject_data['biologicalSex'].iloc[0]
     gender_map = {
-        'female': 'F',
-        'male': 'M'
+        'female': 'Female',
+        'male': 'Male'
     }
     if pd.notna(gender):
         gender = gender_map[gender.lower()]
