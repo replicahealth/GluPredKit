@@ -297,7 +297,10 @@ class Parser(BaseParser):
             df_subject['age'] = demo.get('age', np.nan)
             df_subject['height'] = demo.get('height', np.nan) 
             df_subject['weight'] = demo.get('weight', np.nan)
-        
+            df_subject['gender'] = demo.get('gender', np.nan)
+            df_subject['age_of_diagnosis'] = demo.get('age_of_diagnosis', np.nan)
+            df_subject['ethnicity'] = demo.get('ethnicity', np.nan)
+
         # Add insulin column (bolus + basal)
         df_subject['insulin'] = np.nan
         bolus_values = df_subject['bolus'].fillna(0)
@@ -313,19 +316,7 @@ class Parser(BaseParser):
         # Set to MDI when insulin_type_basal is NOT "Novolin R"
         mdi_mask = df_subject['insulin_type_basal'].notna() & (df_subject['insulin_type_basal'] != 'Novolin R')
         df_subject.loc[mdi_mask, 'insulin_delivery_modality'] = 'MDI'
-        
-        # Add all required np.nan columns
-        nan_columns = [
-            'cgm_device', 'absorption_time', 'acceleration', 'air_temp', 'calories_burned', 
-            'carbs', 'galvanic_skin_response', 'heartrate', 'insulin_delivery_algorithm',
-            'insulin_delivery_device', 'is_pregnant', 'scheduled_basal', 'skin_temp', 
-            'steps', 'workout_duration', 'workout_intensity', 'workout_label', 'is_test',
-            'context_description_cache', 'tag'
-        ]
-        
-        for col in nan_columns:
-            df_subject[col] = np.nan
-        
+
         # Clean up empty string columns
         df_subject['insulin_type_bolus'] = df_subject['insulin_type_bolus'].replace('', np.nan)
         df_subject['insulin_type_basal'] = df_subject['insulin_type_basal'].replace('', np.nan)
@@ -366,3 +357,28 @@ def get_subject_demographics(file_path):
             print(f"Error loading demographics: {e}")
     
     return demographics
+
+
+def main():
+    """Main function to run the AZT1D parser with a hard-coded file path."""
+    # Hard-coded file path - update this to your actual AZT1D dataset path
+    file_path = "data/raw/Shanghai_T1DM/"
+
+    # Create parser instance
+    parser = Parser()
+
+    # Process the data
+    result = parser(file_path)
+    result.to_csv('data/raw/ShanghaiT1DM.csv', index=False)
+
+    if not result.empty:
+        print(f"\nProcessing completed successfully!")
+        print(f"Total records processed: {len(result)}")
+        print(f"Unique subjects: {result['id'].nunique()}")
+        print(f"Date range: {result['date'].min()} to {result['date'].max()}")
+    else:
+        print("No data was processed. Please check the file path and data format.")
+
+
+if __name__ == "__main__":
+    main()
