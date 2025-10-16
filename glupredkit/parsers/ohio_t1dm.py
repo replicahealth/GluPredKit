@@ -224,3 +224,4 @@ def get_insulin_delivery_device(subject_id):
         '591': 'MiniMed 530G',
     }
     return map[subject_id]
+

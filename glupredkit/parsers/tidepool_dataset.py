@@ -339,4 +339,3 @@ def get_age_and_diagnosis(file_path, prefix, subject_id):
     
     return age, gender, age_of_diagnosis
 
-
