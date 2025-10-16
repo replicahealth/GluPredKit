@@ -154,7 +154,8 @@ def parse(parser, username, password, start_date, file_path, end_date, output_fi
             raise ValueError(f"{parser} parser requires that you provide --file-path")
         else:
             parsed_data = chosen_parser(file_path=file_path)
-            output_file_name = "open_aps"
+            output_file_name = "OpenAPS"
+            parsed_data['source_file'] = output_file_name
     elif parser in ['tidepool_dataset']:
         if file_path is None:
             raise ValueError(f"{parser} parser requires that you provide --file-path")

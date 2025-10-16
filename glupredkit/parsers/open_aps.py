@@ -21,6 +21,7 @@ class Parser(BaseParser):
 
         # List all files in the folder
         files = [el for el in os.listdir(file_path) if el.endswith('.zip')]  # 142 subjects
+        #files = ['61179686.zip']
 
         # Process the files one by one
         for file in files:
@@ -30,6 +31,7 @@ class Parser(BaseParser):
                     all_ids = np.unique([file.split('/')[0] for file in zip_ref.namelist() if not file.split('/')[0] == ''])
 
                     for subject_id in all_ids:
+                        print("Merged cols: ", merged_df.columns)
                         print(f'Processing {subject_id}...')
 
                         def get_relevant_files(name):
@@ -106,18 +108,17 @@ class Parser(BaseParser):
                         df_carbs = drop_duplicates(df_carbs, 'carbs')
                         df_carbs = df_carbs.resample('5min').sum().fillna(value=0)
                         df = pd.merge(df, df_carbs, on="date", how='outer')
-                        df['carbs'] = df['carbs'].fillna(value=0.0)
 
                         df_bolus = pd.concat(bolus_dfs)
                         df_bolus = drop_duplicates(df_bolus, 'bolus')
                         df_bolus = df_bolus.resample('5min').sum().fillna(value=0)
                         df = pd.merge(df, df_bolus, on="date", how='outer')
-                        df['bolus'] = df['bolus'].fillna(value=0.0)
 
                         all_basal_dfs = []
                         for basal_file in basal_files:
                             with zip_ref.open(basal_file) as f:
                                 basal_df = pd.read_json(f, convert_dates=False)
+
                             basal_df = basal_df.copy()[['queuedOn', 'profile']]
                             basal_df['queuedOn'] = pd.to_datetime(basal_df['queuedOn'], unit='ms')
                             basal_df['profile'] = pd.to_numeric(basal_df['profile'].apply(lambda x: x['current_basal']))
@@ -195,8 +196,10 @@ class Parser(BaseParser):
                                         df['reservoir'] = df['reservoir'].ffill()
                                         break
 
+                        df['basal'] = df['basal'] / 12  # From U/hr to U
+
                         # Merge bolus and basal into an insulin column
-                        df['insulin'] = df['bolus'] + df['basal'] * 5 / 60
+                        df['insulin'] = df['bolus'].fillna(0) + df['basal']
 
                         # Add id to a column
                         df['id'] = subject_id
@@ -481,7 +484,10 @@ class Parser(BaseParser):
                     df.loc[df['temp'] == 'percentage', 'merged_basal'] = df['temp_basal'] * df['basal'] / 100
                     df.drop(columns=['temp', 'temp_basal', 'basal'], inplace=True)
                     df.rename(columns={'merged_basal': 'basal'}, inplace=True)
-                    df['insulin'] = df['bolus'] + df['basal'] * 5 / 60
+                    df['basal'] = df['basal'] / 12  # From U/hr to U
+
+                    # Merge bolus and basal into an insulin column
+                    df['insulin'] = df['bolus'].fillna(0) + df['basal']
                     df['id'] = id_name
 
                     print(f"Current memory usage: {get_memory_usage()} MB")
@@ -507,6 +513,7 @@ class Parser(BaseParser):
         else:
             print("There are IDs with invalid intervals.")
         """
+        merged_df = add_demographics_to_df(file_path, merged_df)
         return merged_df
 
 def get_memory_usage():
@@ -562,4 +569,265 @@ def parse_datetime_without_timezone(dt_str):
 
     return dt
 
+
+def load_demographics_data(file_path):
+    """Load demographics data from OpenAPS Data Commons Excel file."""
+    demographics_file = f"{file_path}OpenAPS Data Commons_demographics-n-231.xlsx"
+
+    if not os.path.exists(demographics_file):
+        print("Warning: OpenAPS demographics file not found")
+        return pd.DataFrame()
+
+    try:
+        df_demo = pd.read_excel(demographics_file)
+        # Rename the ID column for easier access
+        id_col = 'Your OpenHumans OpenAPS Data Commons "project member ID"'
+        df_demo = df_demo.rename(columns={id_col: 'id'})
+
+        # Ensure 'id' column is string
+        df_demo['id'] = df_demo['id'].astype(str)
+
+        # Ensure dat columns are datetime
+        for col in ['Timestamp', 'When were you diagnosed with diabetes?', 'When were you born?']:
+            df_demo[col] = pd.to_datetime(df_demo[col], errors='coerce')
+
+        return df_demo
+    except Exception as e:
+        print(f"Error loading demographics file: {e}")
+        return pd.DataFrame()
+
+def add_demographics_to_df(file_path, df_merged):
+    # Load demographics data for additional columns
+    demographics_data = load_demographics_data(file_path)
+    df_merged = df_merged.reset_index().sort_values(['id', 'date'])
+    print(df_merged)
+
+    # Fill in demographics data per subject if available
+    if not demographics_data.empty:
+        for subject_id in df_merged['id'].unique():
+            demo_row = demographics_data[demographics_data['id'] == subject_id]
+
+            if not demo_row.empty:
+                row = demo_row.iloc[0]
+
+                # Parse weight (various formats possible)
+                weight = parse_weight(row.get('How much do you weigh?'))
+
+                # Parse height (various formats possible)
+                height = parse_height(row.get('How tall are you?'))
+
+                # Get birth year for dynamic age calculation
+                birth_year = extract_year(row.get('When were you born?'))
+                # There is this weird thing were some birth years are in the future / very close to the registration
+                if birth_year >= extract_year(row.get('Timestamp')):
+                    birth_year = np.nan
+                    print(f"Subject {subject_id} has invalid birth date, set to NaN instead.")
+
+                diagnosis_year = extract_year(row.get('When were you diagnosed with diabetes?'))
+                age_of_diagnosis = diagnosis_year - birth_year
+
+                # Get and clean algorithm information
+                algorithm_raw = row.get(
+                    'What type of DIY close loop technology do you use? Select all that you actively use:')
+                algorithm = clean_algorithm(algorithm_raw)
+
+                gender = row.get('Gender')
+                ethnicity_raw = row.get('Ethnicity origin:')
+                ethnicity = standardize_ethnicity(ethnicity_raw)
+
+                # Set demographics for all records of this subject
+                df_merged.loc[df_merged['id'] == subject_id, 'weight'] = weight
+                df_merged.loc[df_merged['id'] == subject_id, 'height'] = height
+                df_merged.loc[df_merged['id'] == subject_id, 'insulin_delivery_algorithm'] = algorithm
+                df_merged.loc[df_merged['id'] == subject_id, 'gender'] = gender
+                df_merged.loc[df_merged['id'] == subject_id, 'ethnicity'] = ethnicity
+
+                # Calculate dynamic age for each row based on time series date
+                if birth_year:
+                    subject_mask = df_merged['id'] == subject_id
+                    subject_dates = df_merged.loc[subject_mask, 'date']
+                    ages = subject_dates.dt.year - birth_year
+                    df_merged.loc[subject_mask, 'age'] = ages
+                    df_merged.loc[subject_mask, 'age_of_diagnosis'] = age_of_diagnosis
+
+    return df_merged
+
+def parse_weight(weight_str):
+    """Parse weight from various string formats to pounds."""
+    if pd.isna(weight_str):
+        return np.nan
+
+    weight_str = str(weight_str).lower().strip()
+
+    # Extract numbers
+    import re
+    numbers = re.findall(r'\d+\.?\d*', weight_str)
+    if not numbers:
+        return np.nan
+
+    weight = float(numbers[0])
+
+    # Convert kg to lbs
+    if 'kg' in weight_str:
+        weight = weight * 2.20462
+    # Otherwise assume lbs
+
+    return weight
+
+def parse_height(height_str):
+    """Parse height from various string formats to feet."""
+    if pd.isna(height_str):
+        return np.nan
+
+    height_str = str(height_str).lower().strip()
+
+    # Extract numbers
+    import re
+    numbers = re.findall(r'\d+\.?\d*', height_str)
+    if not numbers:
+        return np.nan
+
+    # Handle feet and inches (e.g., "5'10", "5 feet 10 inches")
+    if "'" in height_str or 'feet' in height_str:
+        feet_match = re.search(r'(\d+)', height_str)
+        inches_match = re.search(r'(\d+)(?:\s*inch|")', height_str)
+
+        if feet_match:
+            feet = float(feet_match.group(1))
+            inches = float(inches_match.group(1)) if inches_match else 0
+            return feet + inches / 12.0
+
+    # Handle cm
+    elif 'cm' in height_str:
+        cm = float(numbers[0])
+        return cm * 0.0328084
+
+    # Handle just inches
+    elif 'inch' in height_str:
+        inches = float(numbers[0])
+        return inches / 12.0
+
+    # Default assume it's already in feet or a decimal feet value
+    return float(numbers[0])
+
+def calculate_age(birth_info):
+    """Calculate age from birth year information."""
+    if pd.isna(birth_info):
+        return np.nan
+
+    import re
+    birth_str = str(birth_info).strip()
+
+    # Extract year
+    year_match = re.search(r'(19|20)\d{2}', birth_str)
+    if year_match:
+        birth_year = int(year_match.group())
+        # Calculate age as of 2020 (approximate median year of OpenAPS data)
+        return 2020 - birth_year
+
+    return np.nan
+
+def clean_algorithm(algorithm_raw):
+    """Clean and shorten algorithm descriptions."""
+    if pd.isna(algorithm_raw):
+        return np.nan
+
+    algorithm_str = str(algorithm_raw).strip()
+
+    # Define mapping for algorithm cleaning
+    algorithm_map = {
+        'A "traditional" OpenAPS rig using the oref0 algorithm (i.e. using a Raspberry Pi/Carelink; or an Edison/Explorer Board; etc.)': 'OpenAPS oref0',
+        'OpenAPS using the oref1 algorithm and hard-wired "on" SMB/UAM': 'OpenAPS oref1',
+        'Using UMA but not SMB from oref1': 'OpenAPS oref1 UMA',
+        'OpenAPS Oref1': 'OpenAPS oref1',
+        'Loopkit/Loop': 'Loop',
+        'AndroidAPS': 'AndroidAPS',
+        'Haps': 'Haps'
+    }
+
+    # Split by comma if multiple algorithms
+    algorithms = [alg.strip() for alg in algorithm_str.split(',')]
+    cleaned_algorithms = []
+
+    for algo in algorithms:
+        # Find the best match in our mapping
+        cleaned = algorithm_map.get(algo, algo)
+        if cleaned not in cleaned_algorithms:  # Avoid duplicates
+            cleaned_algorithms.append(cleaned)
+
+    return ', '.join(cleaned_algorithms) if cleaned_algorithms else np.nan
+
+
+def standardize_ethnicity(ethnicity_raw):
+    """Standardize ethnicity values according to specified mappings."""
+    if pd.isna(ethnicity_raw):
+        return np.nan
+
+    ethnicity_str = str(ethnicity_raw).strip()
+
+    # Define ethnicity standardization mapping
+    ethnicity_map = {
+        'Ashkenaz Jewish': 'White',
+        'I prefer not to answer': np.nan,
+        "halfbreed' white/latino": 'White, Hispanic/Latino',
+        '1/2 Spanish, 1/4 German, 1/4 Prussian': 'White',
+        # Keep existing values as they are
+        'White': 'White',
+        'Asian/Pacific Islander': 'Asian/Pacific Islander',
+        'Two or more races': 'Two or more races',
+        'Mixed Race': 'Mixed Race'
+    }
+
+    return ethnicity_map.get(ethnicity_str, ethnicity_str)
+
+
+def parse_age_of_diagnosis(self, diagnosis_info, birth_info):
+    """Parse age of diagnosis from various formats, using birth year and diagnosis year when possible."""
+    import re
+
+    # First try to calculate from birth year and diagnosis year
+    if pd.notna(diagnosis_info) and pd.notna(birth_info):
+        # Extract years from both fields
+        diagnosis_year = self.extract_year(diagnosis_info)
+        birth_year = self.extract_year(birth_info)
+
+        if diagnosis_year and birth_year:
+            age_at_diagnosis = diagnosis_year - birth_year
+            if 0 <= age_at_diagnosis <= 100:  # Reasonable age range
+                return float(age_at_diagnosis)
+
+    # Fallback to parsing age directly from diagnosis info
+    if pd.isna(diagnosis_info):
+        return np.nan
+
+    diagnosis_str = str(diagnosis_info).lower()
+
+    # Look for age patterns (e.g., "when I was 25 years old")
+    age_match = re.search(r'(\d+)\s*(?:years?\s*old|yrs?)', diagnosis_str)
+    if age_match:
+        return float(age_match.group(1))
+
+    # Look for just numbers if it's a simple age
+    number_match = re.search(r'^\d+$', diagnosis_str.strip())
+    if number_match:
+        age = int(number_match.group())
+        if 0 <= age <= 100:  # Reasonable age range
+            return float(age)
+
+    return np.nan
+
+def extract_year(date_info):
+    """Extract year from various date formats."""
+    if pd.isna(date_info):
+        return None
+
+    import re
+    date_str = str(date_info)
+
+    # Look for 4-digit years (1900-2099)
+    year_match = re.search(r'(19|20)\d{2}', date_str)
+    if year_match:
+        return int(year_match.group())
+
+    return None
 
