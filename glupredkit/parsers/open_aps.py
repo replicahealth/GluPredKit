@@ -21,7 +21,6 @@ class Parser(BaseParser):
 
         # List all files in the folder
         files = [el for el in os.listdir(file_path) if el.endswith('.zip')]  # 142 subjects
-        #files = ['61179686.zip']
 
         # Process the files one by one
         for file in files:
@@ -31,7 +30,6 @@ class Parser(BaseParser):
                     all_ids = np.unique([file.split('/')[0] for file in zip_ref.namelist() if not file.split('/')[0] == ''])
 
                     for subject_id in all_ids:
-                        print("Merged cols: ", merged_df.columns)
                         print(f'Processing {subject_id}...')
 
                         def get_relevant_files(name):
