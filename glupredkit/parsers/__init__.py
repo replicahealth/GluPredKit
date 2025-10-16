@@ -20,4 +20,5 @@ T1DexiParser = safe_import(".t1dexi", "Parser", package="glupredkit.parsers")
 TidepoolAPIParser = safe_import(".tidepool", "Parser", package="glupredkit.parsers")
 TidepoolDatasetParser = safe_import(".tidepool_dataset", "Parser", package="glupredkit.parsers")
 IOBP2Parser = safe_import(".IOBP2", "Parser", package="glupredkit.parsers")
+DiaTrendParser = safe_import(".diatrendparser", "Parser", package="glupredkit.parsers")
 

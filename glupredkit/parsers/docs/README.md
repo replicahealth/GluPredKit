@@ -19,19 +19,104 @@ The core dataset should consist of:
 
 
 
-
 Output is a dataframe, where each subject has data sorted by ascending dates of 5-minute intervals. 
 
 
+## IOBP2
+
+### Overview
+
+In the iLet trial, continuous data is primarily collected for participants using the Bionic Pancreas. 
+
+There are 11 subjects from the control arm in the data for the Bionic Pancreas. After suggestion from Peter from JAEB, we filter out these subjects. There is very little data from these subjects, and the data is from long before extension period. Hence, it is not known whether this data was from using the iLet Bionic Pancreas.
+
+**Study Design:**
+- 66% of pediatric participants and 80% of adult participants use the Bionic Pancreas (protocol chapter 3.3)
+- Control group continues current diabetes management with Dexcom G6 (chapters 3.4 and A.2)
+- **Treatment groups:** BP (216), BPFiasp (113), Control (107) - 
+
+### Data Fields
+
+| Field | Value | Notes |
+|-------|-------|-------|
+| `insulin_delivery_device` | Beta Bionics Gen 4 iLet | All treatment group subjects |
+| `insulin_delivery_algorithm` | iLet Bionic Pancreas | All treatment group subjects |
+| `insulin_delivery_modality` | AID | Automated Insulin Delivery for all |
+| `cgm_device` | Dexcom G6 | Protocol requirement for all participants |
+| `is_pregnant` | False | Pregnancy is exclusion criterion (Protocol Summary, Exclusion 13) |
+
+**Insulin Types:**
+- **BPFiasp group:** Both `insulin_type_bolus` and `insulin_type_basal` set to "Fiasp"
+- **BP group:** Determined from `IOBP2Insulin.txt` using pump route data
+  - Priority system when both available: enrollment status → valid dates → default selection
+  - Same insulin type assigned to both bolus and basal
+
+### Processed Data Statistics
+
+**Dataset Overview:**
+- **Total subjects:** 332 (BP + BPFiasp groups only)
+- **Time points:** 9,676,885 at 5-minute intervals
+- **Dataset shape:** (9,676,885, 22)
+- **Output:** `data/processed/IOBP2.csv`
+
+**Data Coverage:**
+- Glucose readings: 7,804,251
+- Bolus events: 1,711,927
+- Basal events: 6,233,455
+- Meal events: 87,161
+
+**Demographics:**
+| Metric | Statistics |
+|--------|------------|
+| Age | Mean: 31.8 ± 19.2 years (range: 6-82) |
+| Gender | Female: 169, Male: 163 |
+| Height | Mean: 5.39 ± 0.51 ft (range: 3.54-6.37) |
+| Weight | Mean: 161.6 ± 51.9 lbs (range: 49.4-350.0) |
+| Age at diagnosis | Mean: 13.8 ± 11.4 years (range: 0-58) |
+
+**Ethnicity Distribution:**
+- White: 254 (76.5%)
+- Black/African American: 37 (11.1%)
+- White, Hispanic/Latino: 21 (6.3%)
+- More than one race: 7 (2.1%)
+- More than one race, Hispanic/Latino: 4 (1.2%)
+
+**Insulin Distribution:**
+- Humalog (Lispro): 126 subjects
+- Fiasp: 113 subjects  
+- Novolog (Aspart): 90 subjects
 
 
-### T1Dexi
+### Assumptions and Limitations
+
+**Excluded Data:**
+- **`IOBP2ManualInsulinInj.txt`:** Insulin types unclear; excluded following babelbetes approach. Contains only 198 samples (0.002% of total dataset).
+- **`IOBP2MealDose.txt`:** Purpose unclear; minimal meal data per subject with no overlap to continuous study data.
+
+**Data Processing Notes:**
+- Control group excluded due to limited continuous monitoring data
+- Insulin type determination prioritizes enrollment status and date validity
 
 
-To do: 
-- Validate the handling of heartrate data
-- Add steps data
-- Add tests
+### Control Arm Data
+
+
+## T1DEXI
+
+### Assumptions and Limitations
+
+- Subjects on MDI kept a diary of logged insulin for MDI participants, but there are potential issues with using diary records
+
+
+
+
+## DiaTrend
+
+### Limitations and Assumptions 
+
+- Only a subset of 17 subjects have basal data because of an error that happened during data collection. Hence, we only include these subjects in the processing. 
+- The age is noted in the dataset as an interval of 10 years. Since our dataset dictionary defines the age as a numeric type, we have used the midpoint value, because we argue that it is more important to preserve the information that the subject is an adult, rather than having the exact age value. 
+- It is assumed that subjects using MiniMed 670G is using that with the SmartGuard function active 
 
 
 
