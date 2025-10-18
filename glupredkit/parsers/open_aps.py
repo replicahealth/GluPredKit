@@ -397,9 +397,15 @@ class Parser(BaseParser):
                                         except json.JSONDecodeError as json_err:
                                             print(f"Skipping devicestatus line due to error: {json_err}")
                             else:
-                                devicestatus_df = pd.read_json(f, convert_dates=False, lines=True)
-                            
+                                print(f"Skipping devicestatus line for subject {subject_id}")
+                                continue
+
+                            if devicestatus_df is None:
+                                print(f"Devicestatus is None. Skipping devicestatus line for subject {subject_id}")
+                                continue
+
                             if devicestatus_df.empty:
+                                print(f"Devicestatus is empty. Skipping devicestatus line for subject {subject_id}")
                                 continue
                             
                             # Extract reservoir data if available
