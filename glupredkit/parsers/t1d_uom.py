@@ -28,23 +28,20 @@ class Parser(BaseParser):
         """
         print(f"Processing T1D-UOM data from {file_path}")
 
-        subject_ids = [f[-8:-4] for f in os.listdir(f'{file_path}/{CGM_FOLDER}/') if f.endswith(".csv")]
-        print("all subjects", subject_ids)
-
+        subject_ids = [f[-8:-4] for f in os.listdir(f'{file_path}/{CGM_FOLDER}/') if f.endswith(".csv")
+                       if not f[-8:-4] in ['2303', '2320', '2404']]
         df_demographics = self.get_demographics_df(file_path)
-        print("DEMOGRAPHICS", df_demographics)
+        all_resampled_dfs = []
+        for subject_id in subject_ids:
+            print("Processing subject: ", subject_id)
+            resampled_df = self.get_resampled_df_for_subject(file_path, subject_ids[0], df_demographics)
+            all_resampled_dfs.append(resampled_df)
 
-        # TODO: Add demographics for each subject
-        # TODO: Make for loop and concat
-        # TODO: Skip subject 2303, 2320, and 2404, as they dont have basal data
-        df = self.get_resampled_df_for_subject(file_path, subject_ids[0])
+        merged_df = pd.concat(all_resampled_dfs, ignore_index=True)
+        merged_df['source_file'] = 'T1D-UOM'
+        return merged_df
 
-        # TODO: Add source file
-
-        return df
-
-
-    def get_resampled_df_for_subject(self, file_path, subject_id):
+    def get_resampled_df_for_subject(self, file_path, subject_id, demographics_df):
         glucose_df = self.get_glucose_df(file_path, subject_id)
         meals_df = self.get_meals_df(file_path, subject_id)
         bolus_df = self.get_bolus_df(file_path, subject_id)
@@ -56,14 +53,28 @@ class Parser(BaseParser):
         merged_df = self.merge_df(merged_df, basal_df)
         merged_df = self.merge_df(merged_df, activity_df)
 
+        # Add demographics
+        subject_demographics = demographics_df[demographics_df['participant_id'] == subject_id].iloc[0]
+        demographics_cols = ['weight', 'height']
+        for col in demographics_cols:
+            merged_df[col] = subject_demographics[col]
+        subject_demographics = self.create_participant_data_dataframe(subject_id)
+        demographics_cols = ['gender', 'age', 'insulin_delivery_device']
+        for col in demographics_cols:
+            merged_df[col] = subject_demographics[col]
+
+        # The paper states that: "This dataset includes participants using both multiple daily injections (MDI) and
+        # insulin pumps operating in open-loop mode"
+        merged_df['insulin_delivery_algorithm'] = merged_df['insulin_delivery_device'].map({
+            'Rapid-Acting': 'basal-bolus',
+            'Long-Acting': 'MDI'
+        })
+        merged_df['insulin_delivery_modality'] = merged_df['insulin_delivery_device'].map({
+            'Rapid-Acting': 'SAP',
+            'Long-Acting': 'MDI'
+        })
         merged_df['id'] = subject_id
-
         merged_df['insulin_type_basal'] = merged_df['insulin_type_basal'].ffill().bfill()
-
-        # TODO: Add insulin delivery algo and modality, knowing from the paper: "This dataset includes participants using both multiple daily injections (MDI) and insulin pumps operating in open-loop mode"
-
-        print("MERGED!!!")
-        print(merged_df)
 
         return merged_df
 
@@ -154,7 +165,7 @@ class Parser(BaseParser):
         resampled_df = df.resample('5min').agg({
             'calories_burned': lambda x: x.sum(min_count=1),
             'steps': lambda x: x.sum(min_count=1),
-            'insulin_type_basal': 'last',
+            'workout_label': 'last',
             'workout_duration': lambda x: x.sum(min_count=1),
         })
         return resampled_df
@@ -169,6 +180,52 @@ class Parser(BaseParser):
 
         df.rename(columns={'weight_kg': 'weight', 'height_m': 'height'}, inplace=True)
         return df[['participant_id', 'weight', 'height']]
+
+    def create_participant_data_dataframe(self, subject_id):
+        """
+        Creates a pandas DataFrame of participant diabetes management data,
+        excluding the 'Start Date', 'End Date', and 'TIR (%)' columns.
+
+        This dataframe is created from the values in Table 2 in the Nature paper
+        """
+        data = [
+            {'Participant ID': '2301', 'gender': 'Female', 'age': 25, 'Sensor': 'CGM',
+             'insulin_delivery_device': 'Tandem t:slim X2'},
+            {'Participant ID': '2302', 'gender': 'Female', 'age': 29, 'Sensor': 'Flash',
+             'insulin_delivery_device': 'MDI'},
+            {'Participant ID': '2303', 'gender': 'Female', 'age': 29, 'Sensor': 'CGM',
+             'insulin_delivery_device': 'N/A'},
+            {'Participant ID': '2304', 'gender': 'Female', 'age': 29, 'Sensor': 'Flash',
+             'insulin_delivery_device': 'MiniMed 780G'},
+            {'Participant ID': '2305', 'gender': 'Female', 'age': 50, 'Sensor': 'Flash',
+             'insulin_delivery_device': 'MDI'},
+            {'Participant ID': '2306', 'gender': 'Female', 'age': 50, 'Sensor': 'Flash',
+             'insulin_delivery_device': 'MDI'},
+            {'Participant ID': '2307', 'gender': 'Female', 'age': 61, 'Sensor': 'CGM',
+             'insulin_delivery_device': 'Tandem t:slim X2'},
+            {'Participant ID': '2308', 'gender': 'Male', 'age': 59, 'Sensor': 'CGM',
+             'insulin_delivery_device': 'MiniMed 780G'},
+            {'Participant ID': '2309', 'gender': 'Female', 'age': 59, 'Sensor': 'CGM',
+             'insulin_delivery_device': 'MiniMed 780G'},
+            {'Participant ID': '2310', 'gender': 'Male', 'age': 70, 'Sensor': 'CGM',
+             'insulin_delivery_device': 'MiniMed 780G'},
+            {'Participant ID': '2313', 'gender': 'Male', 'age': 39, 'Sensor': 'Flash',
+             'insulin_delivery_device': 'MDI'},
+            {'Participant ID': '2314', 'gender': 'Male', 'age': 61, 'Sensor': 'Flash',
+             'insulin_delivery_device': 'MDI'},
+            {'Participant ID': '2320', 'gender': 'Female', 'age': 46, 'Sensor': 'CGM',
+             'insulin_delivery_device': 'Omnipod 5'},
+            {'Participant ID': '2401', 'gender': 'Male', 'age': 46, 'Sensor': 'Flash',
+             'insulin_delivery_device': 'MDI'},
+            {'Participant ID': '2403', 'gender': 'Male', 'age': 23, 'Sensor': 'Flash',
+             'insulin_delivery_device': 'MDI'},
+            {'Participant ID': '2404', 'gender': 'Female', 'age': 37, 'Sensor': 'Flash',
+             'insulin_delivery_device': 'MDI'},
+            {'Participant ID': '2405', 'gender': 'Male', 'age': 52, 'Sensor': 'Flash',
+             'insulin_delivery_device': 'MDI'}
+        ]
+        df = pd.DataFrame(data)
+        return df[df['Participant ID'] == subject_id].iloc[0]
 
 
 def main():
