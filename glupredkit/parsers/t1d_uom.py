@@ -49,14 +49,12 @@ class Parser(BaseParser):
         meals_df = self.get_meals_df(file_path, subject_id)
         bolus_df = self.get_bolus_df(file_path, subject_id)
         basal_df = self.get_basal_df(file_path, subject_id)
-
-        # TODO: Merge!
         activity_df = self.get_activity_df(file_path, subject_id)
-        print(activity_df)
 
         merged_df = self.merge_df(glucose_df, meals_df)
         merged_df = self.merge_df(merged_df, bolus_df)
         merged_df = self.merge_df(merged_df, basal_df)
+        merged_df = self.merge_df(merged_df, activity_df)
 
         merged_df['id'] = subject_id
 
@@ -152,7 +150,14 @@ class Parser(BaseParser):
         df.rename(columns={'activity_ts': 'date', 'active_Kcal': 'calories_burned',
                            'step_count': 'steps', 'duration_s': 'workout_duration',
                            'activity_type': 'workout_label'}, inplace=True)
-        return df[['date', 'calories_burned', 'steps', 'workout_label', 'workout_duration']]
+        df = df.set_index('date')
+        resampled_df = df.resample('5min').agg({
+            'calories_burned': lambda x: x.sum(min_count=1),
+            'steps': lambda x: x.sum(min_count=1),
+            'insulin_type_basal': 'last',
+            'workout_duration': lambda x: x.sum(min_count=1),
+        })
+        return resampled_df
 
     def get_demographics_df(self, file_path):
         df = pd.read_csv(f'{file_path}/{DEMOGRAPHICS_FOLDER}/UoMBMI.csv')
