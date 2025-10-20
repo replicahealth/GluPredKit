@@ -28,16 +28,17 @@ class Parser(BaseParser):
         # Get all CSV files from the CGM Records folder
         csv_files = []
         for i in range(1, 26):  # Subjects 1-25
-            subject_path = os.path.join(file_path, f"Subject {i}", f"Subject {i}.csv")
-            if os.path.exists(subject_path):
-                csv_files.append(subject_path)
+            if not i in [10, 23]:  # Skipping subject 10 and 23 due to weird basal values ranging from 0 to above 1000
+                subject_path = os.path.join(file_path, f"Subject {i}", f"Subject {i}.csv")
+                if os.path.exists(subject_path):
+                    csv_files.append(subject_path)
         
         print(f"Found {len(csv_files)} CSV files")
         
         all_processed_data = []
         
         for file_idx, file_path_full in enumerate(csv_files):
-            print(f"\rProcessing file {file_idx + 1}/{len(csv_files)}: {os.path.basename(file_path_full)}", end="", flush=True)
+            print(f"\rProcessing file {file_idx + 1}/{len(csv_files)}: {os.path.basename(file_path_full)} ", end="", flush=True)
             
             try:
                 # Extract subject ID from filename (e.g., Subject 1.csv -> 1)
@@ -92,7 +93,15 @@ class Parser(BaseParser):
         
         # Create a copy to work with
         df_subject = df_raw.copy()
-        
+
+        # Correcting for weird basal rates, that systematically have the comma replaced three places
+        df_subject['Basal'] = pd.to_numeric(df_subject['Basal'], errors='coerce')
+
+        basal_threshold = 100
+        df_subject.loc[df_subject['Basal'] > basal_threshold, 'Basal'] /= 1000
+        if not df_raw.loc[df_raw['Basal'] > basal_threshold, 'Basal'].empty:
+            print(f"Divided {df_raw.loc[df_raw['Basal'] > basal_threshold, 'Basal'].shape[0]} basal values by 1000")
+
         # Handle different CGM column names
         if 'Readings (CGM / BGM)' in df_subject.columns:
             df_subject = df_subject.rename(columns={'Readings (CGM / BGM)': 'CGM'})

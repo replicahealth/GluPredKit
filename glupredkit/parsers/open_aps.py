@@ -622,12 +622,18 @@ def add_demographics_to_df(file_path, df_merged):
 
                 # Get birth year for dynamic age calculation
                 birth_year = extract_year(row.get('When were you born?'))
-                # There is this weird thing were some birth years are in the future / very close to the registration
-                if birth_year >= extract_year(row.get('Timestamp')):
-                    birth_year = np.nan
-                    print(f"Subject {subject_id} has invalid birth date, set to NaN instead.")
-
                 diagnosis_year = extract_year(row.get('When were you diagnosed with diabetes?'))
+
+                # There is this weird thing were some birth years are in the future / very close to the registration
+                if diagnosis_year is None:
+                    diagnosis_year = np.nan
+                if birth_year is None:
+                    birth_year = np.nan
+                else:
+                    if birth_year >= extract_year(row.get('Timestamp')):
+                        birth_year = np.nan
+                        print(f"Subject {subject_id} has invalid birth date, set to NaN instead.")
+
                 age_of_diagnosis = diagnosis_year - birth_year
 
                 # Get and clean algorithm information

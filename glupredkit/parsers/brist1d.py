@@ -31,7 +31,7 @@ class Parser(BaseParser):
                 subject_id = f'P{i+1}'
             subject_file_path = f'{file_path}/device_data/processed_state/{subject_id}.csv'
 
-            print("SUBJECT ID", subject_id)
+            print("Processing subject: ", subject_id)
 
             if not os.path.exists(subject_file_path):
                 # skip this iteration
@@ -48,7 +48,34 @@ class Parser(BaseParser):
             all_resampled_dfs.append(resampled_df)
 
         merged_df = pd.concat(all_resampled_dfs, ignore_index=True)
+        merged_df = self.get_insulin_delivery_modality_from_insulin_delivery_device(merged_df)
+        merged_df = self.get_insulin_delivery_algorithm_from_insulin_delivery_device(merged_df)
+        merged_df['source_file'] = 'BrisT1D'
         return merged_df
+
+    def get_insulin_delivery_modality_from_insulin_delivery_device(self, df):
+        mapping = {
+            'Medtronic MiniMed 780G': 'AID',
+            'Medtronic MiniMed 640G': 'SAP',
+            # Tandem t:slim X2 could be using either SAP or AID
+            'Omnipod Eros': 'SAP',
+            'Omnipod Dash': 'SAP',
+            'Omnipod 5': 'AID'
+        }
+        df['insulin_delivery_modality'] = df['insulin_delivery_device'].map(mapping)
+        return df
+
+    def get_insulin_delivery_algorithm_from_insulin_delivery_device(self, df):
+        mapping = {
+            'Medtronic MiniMed 780G': 'SmartGuard™ Auto Mode',
+            'Medtronic MiniMed 640G': 'SmartGuard™ Predictive Low Glucose Suspend',
+            # Tandem t:slim X2 could be using either Control-IQ or Basal-IQ
+            'Omnipod Eros': 'basal-bolus',
+            'Omnipod Dash': 'basal-bolus',
+            'Omnipod 5': 'Omnipod 5'
+        }
+        df['insulin_delivery_algorithm'] = df['insulin_delivery_device'].map(mapping)
+        return df
 
     def get_demographics(self, file_path):
         df_demographics = pd.read_csv(f'{file_path}/demographic_data.csv', encoding='latin1')
@@ -165,8 +192,6 @@ class Parser(BaseParser):
         failed = [name for name, passed in checks.items() if not passed]
         if failed:
             raise ValueError(f"Preservation check failed for: {', '.join(failed)}")
-
-        # TODO: Do we have insulin delivery algorithm and insulin delivery modality?
 
         resampled_df.reset_index(inplace=True)
         resampled_df = resampled_df.rename(columns={
