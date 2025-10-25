@@ -34,7 +34,7 @@ class Parser(BaseParser):
         all_resampled_dfs = []
         for subject_id in subject_ids:
             print("Processing subject: ", subject_id)
-            resampled_df = self.get_resampled_df_for_subject(file_path, subject_ids[0], df_demographics)
+            resampled_df = self.get_resampled_df_for_subject(file_path, subject_id, df_demographics)
             all_resampled_dfs.append(resampled_df)
 
         merged_df = pd.concat(all_resampled_dfs, ignore_index=True)
@@ -48,10 +48,18 @@ class Parser(BaseParser):
         basal_df = self.get_basal_df(file_path, subject_id)
         activity_df = self.get_activity_df(file_path, subject_id)
 
-        merged_df = self.merge_df(glucose_df, meals_df)
+        if meals_df.empty:
+            merged_df = glucose_df.copy()
+            merged_df['carbs'] = np.nan
+            merged_df['meal_label'] = np.nan
+        else:
+            merged_df = self.merge_df(glucose_df, meals_df)
+
         merged_df = self.merge_df(merged_df, bolus_df)
         merged_df = self.merge_df(merged_df, basal_df)
         merged_df = self.merge_df(merged_df, activity_df)
+
+        merged_df['insulin'] = merged_df['bolus'].fillna(0) + merged_df['basal']
 
         # Add demographics
         subject_demographics = demographics_df[demographics_df['participant_id'] == subject_id].iloc[0]
@@ -63,19 +71,21 @@ class Parser(BaseParser):
         for col in demographics_cols:
             merged_df[col] = subject_demographics[col]
 
+        # Insulin type is the same for the entire subject dataset
+        merged_df['insulin_type_basal'] = merged_df['insulin_type_basal'].ffill().bfill()
+
         # The paper states that: "This dataset includes participants using both multiple daily injections (MDI) and
         # insulin pumps operating in open-loop mode"
-        merged_df['insulin_delivery_algorithm'] = merged_df['insulin_delivery_device'].map({
+        merged_df['insulin_delivery_algorithm'] = merged_df['insulin_type_basal'].map({
             'Rapid-Acting': 'basal-bolus',
             'Long-Acting': 'MDI'
         })
-        merged_df['insulin_delivery_modality'] = merged_df['insulin_delivery_device'].map({
+        merged_df['insulin_delivery_modality'] = merged_df['insulin_type_basal'].map({
             'Rapid-Acting': 'SAP',
             'Long-Acting': 'MDI'
         })
         merged_df['id'] = subject_id
-        merged_df['insulin_type_basal'] = merged_df['insulin_type_basal'].ffill().bfill()
-
+        merged_df.reset_index(inplace=True)
         return merged_df
 
     def merge_df(self, base_df, new_df):
@@ -85,7 +95,7 @@ class Parser(BaseParser):
 
     def get_glucose_df(self, file_path, subject_id):
         df = pd.read_csv(f'{file_path}/{CGM_FOLDER}/UoMGlucose{subject_id}.csv')
-        df['bg_ts'] = pd.to_datetime(df['bg_ts'], format="%d/%m/%Y %H:%M")
+        df['bg_ts'] = pd.to_datetime(df['bg_ts'].str.strip(), format="%d/%m/%Y %H:%M")
         df['value'] = df['value'] * 18.018
         df.rename(columns={'bg_ts': 'date', 'value': 'CGM'}, inplace=True)
         df = df.set_index('date')
@@ -93,8 +103,14 @@ class Parser(BaseParser):
         return resampled_df
 
     def get_meals_df(self, file_path, subject_id):
-        df = pd.read_csv(f'{file_path}/{MEALS_DATA_FOLDER}/UoMNutrition{subject_id}.csv')
-        df['meal_ts'] = pd.to_datetime(df['meal_ts'], format="%d/%m/%Y %H:%M")
+        file = f"{file_path}/{MEALS_DATA_FOLDER}/UoMNutrition{subject_id}.csv"
+
+        if os.path.exists(file):
+            df = pd.read_csv(file)
+        else:
+            print(f"File not found: {file}")
+            return pd.DataFrame()
+        df['meal_ts'] = pd.to_datetime(df['meal_ts'].str.strip(), format='mixed', dayfirst=True)
         df['meal_tag'] = df['meal_tag'].replace('Not Reported', None)
         df.rename(columns={'meal_ts': 'date', 'carbs_g': 'carbs', 'meal_tag': 'meal_label'}, inplace=True)
         df = df.set_index('date')
@@ -106,7 +122,7 @@ class Parser(BaseParser):
 
     def get_bolus_df(self, file_path, subject_id):
         df = pd.read_csv(f'{file_path}/{BOLUS_FOLDER}/UoMBolus{subject_id}.csv')
-        df['bolus_ts'] = pd.to_datetime(df['bolus_ts'], format="%d/%m/%Y %H:%M")
+        df['bolus_ts'] = pd.to_datetime(df['bolus_ts'].str.strip(), format="%d/%m/%Y %H:%M")
         df.rename(columns={'bolus_ts': 'date', 'bolus_dose': 'bolus'}, inplace=True)
         df = df.set_index('date')
         resampled_df = df.resample('5min').agg({
@@ -116,7 +132,7 @@ class Parser(BaseParser):
 
     def get_basal_df(self, file_path, subject_id):
         df = pd.read_csv(f'{file_path}/{BASAL_FOLDER}/UoMBasal{subject_id}.csv')
-        df['basal_ts'] = pd.to_datetime(df['basal_ts'], format="%d/%m/%Y %H:%M")
+        df['basal_ts'] = pd.to_datetime(df['basal_ts'].str.strip(), format="%d/%m/%Y %H:%M")
 
         # If it is a pump-user, the unit is reported in U/hr, and we need to convert
         df.loc[df['insulin_kind'] == 'R', 'basal_dose'] /= 12
@@ -133,7 +149,7 @@ class Parser(BaseParser):
 
     def get_activity_df(self, file_path, subject_id):
         df = pd.read_csv(f'{file_path}/{ACTIVITY_DATA_FOLDER}/UoMActivity{subject_id}.csv')
-        df['activity_ts'] = pd.to_datetime(df['activity_ts'], format="%d/%m/%Y %H:%M")
+        df['activity_ts'] = pd.to_datetime(df['activity_ts'].str.strip(), format="%d/%m/%Y %H:%M")
         df['duration_s'] = df['duration_s'] / 60
 
         # Set workout duration, workout label to nan
