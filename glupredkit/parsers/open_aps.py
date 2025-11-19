@@ -609,16 +609,15 @@ def add_demographics_to_df(file_path, df_merged):
     # Fill in demographics data per subject if available
     if not demographics_data.empty:
         for subject_id in df_merged['id'].unique():
-            demo_row = demographics_data[demographics_data['id'] == subject_id]
-
+            demo_row = demographics_data[demographics_data['id'].astype(str) == str(subject_id)]
             if not demo_row.empty:
                 row = demo_row.iloc[0]
 
-                # Parse weight (various formats possible)
-                weight = parse_weight(row.get('How much do you weigh?'))
-
                 # Parse height (various formats possible)
                 height = parse_height(row.get('How tall are you?'))
+
+                # Parse weight (various formats possible)
+                weight = parse_weight(row.get('How much do you weigh?'), height)
 
                 # Get birth year for dynamic age calculation
                 birth_year = extract_year(row.get('When were you born?'))
@@ -662,7 +661,7 @@ def add_demographics_to_df(file_path, df_merged):
 
     return df_merged
 
-def parse_weight(weight_str):
+def parse_weight(weight_str, height):
     """Parse weight from various string formats to pounds."""
     if pd.isna(weight_str):
         return np.nan
@@ -678,10 +677,11 @@ def parse_weight(weight_str):
     weight = float(numbers[0])
 
     # Convert kg to lbs
-    if 'kg' in weight_str:
+    if weight_str == '242 (110 kg)':
+        weight = 242
+    elif 'kg' in weight_str:
         weight = weight * 2.20462
     # Otherwise assume lbs
-
     return weight
 
 def parse_height(height_str):
@@ -697,28 +697,129 @@ def parse_height(height_str):
     if not numbers:
         return np.nan
 
+    height = float(numbers[0])
+
     # Handle feet and inches (e.g., "5'10", "5 feet 10 inches")
-    if "'" in height_str or 'feet' in height_str:
+    height_str = height_str.replace('’', "'").replace('‘', "'").replace('´', "'").replace('”', '"').replace('“', '"')
+    height_str = height_str.replace(' ', '')  # remove spaces
+    if "'" in height_str or 'feet' in height_str or '"' in height_str or '″' in height_str:
         feet_match = re.search(r'(\d+)', height_str)
         inches_match = re.search(r'(\d+)(?:\s*inch|")', height_str)
 
         if feet_match:
             feet = float(feet_match.group(1))
             inches = float(inches_match.group(1)) if inches_match else 0
-            return feet + inches / 12.0
+
+        # Manually handle wrongly formatted input-values
+        if height_str == "5'11.5\"":
+            feet = 5
+            inches = 11.5
+        elif height_str == "5'11":
+            feet = 5
+            inches = 11
+        elif height_str == "3'7''":
+            feet = 3
+            inches = 7
+        elif height_str == "5'8.5''":
+            feet = 5
+            inches = 8.5
+        elif height_str == '5"8"':
+            feet = 5
+            inches = 8
+        elif height_str == "5'8":
+            feet = 5
+            inches = 8
+        elif height_str == "5'10":
+            feet = 5
+            inches = 10
+        elif height_str == "6″0":
+            feet = 6
+            inches = 0
+        elif height_str == "5'6'":
+            feet = 5
+            inches = 6
+        elif height_str == "6'0''":
+            feet = 6
+            inches = 0
+        elif height_str == "5'3''":
+            feet = 5
+            inches = 3
+        elif height_str == "6'2''":
+            feet = 6
+            inches = 2
+        elif height_str == "5'8''":
+            feet = 5
+            inches = 8
+        elif height_str == "5'7''":
+            feet = 5
+            inches = 7
+        elif height_str == "5'2":
+            feet = 5
+            inches = 2
+        elif height_str == "5'8.6\"":
+            feet = 5
+            inches = 8.6
+        elif height_str == "5'3":
+            feet = 5
+            inches = 3
+        elif height_str == '6"0"':
+            feet = 6
+            inches = 0
+        elif height_str == "5'7":
+            feet = 5
+            inches = 7
+        elif height_str == "5,9":
+            feet = 5
+            inches = 9
+        elif height_str == "6'13\"(187cm)":
+            return round(187 * 0.0328084, 2)
+        elif height_str == "6'4''":
+            feet = 6
+            inches = 4
+        elif height_str == "6'":
+            feet = 6
+            inches = 0
+        elif height_str == "5'77\"":
+            return np.nan
+        elif height_str == "5'11'":
+            feet = 5
+            inches = 11
+        elif height_str == "5'11'":
+            feet = 5
+            inches = 11
+        elif height_str == "5,7":
+            feet = 5
+            inches = 7
+        elif height_str == "66'54\"":
+            return np.nan
+        elif height_str == "5'55\"":
+            return np.nan
+
+        height = feet + inches / 12.0
 
     # Handle cm
     elif 'cm' in height_str:
         cm = float(numbers[0])
-        return cm * 0.0328084
+        height = cm * 0.0328084
 
     # Handle just inches
     elif 'inch' in height_str:
         inches = float(numbers[0])
-        return inches / 12.0
+        height = inches / 12.0
+
+    # Cm determined based on unlikely feet numbers
+    elif height > 9:
+        # There is one person that likely has entered in inches (based on age and weight)
+        if height == 70:
+            height = 70 / 12
+        else:
+            cm = float(numbers[0])
+            height = cm * 0.0328084
+
+    height = round(height, 2)
 
     # Default assume it's already in feet or a decimal feet value
-    return float(numbers[0])
+    return height
 
 def calculate_age(birth_info):
     """Calculate age from birth year information."""
@@ -840,4 +941,18 @@ def extract_year(date_info):
         return int(year_match.group())
 
     return None
+
+
+def main():
+    # Test the demographics
+    file_path = 'data/raw/OpenAPS/'
+    merged_df = pd.read_csv('data/raw/OpenAPS.csv')
+    merged_df['date'] = pd.to_datetime(merged_df['date'])
+    merged_df = add_demographics_to_df(file_path, merged_df)
+
+    merged_df.to_csv('OpenAPS.csv')
+
+
+if __name__ == "__main__":
+    main()
 
