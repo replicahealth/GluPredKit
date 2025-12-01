@@ -69,9 +69,12 @@ class Parser(BaseParser):
         print("\n\nCombining all processed data...")
         
         if all_processed_data:
-            df_final = pd.concat(all_processed_data, ignore_index=True)
-            df_final = df_final.sort_values(['id', 'date']).reset_index(drop=True)
-            
+            df_final = pd.concat(all_processed_data)
+
+            # Sort by 'id' column first, then by index (date)
+            df_final = df_final.sort_values('id')
+            df_final = df_final.sort_index()
+
             # Store in df
             self.df = df_final.copy()
 
@@ -114,7 +117,7 @@ class Parser(BaseParser):
             'TotalBolusInsulinDelivered': 'bolus',
             'CarbSize': 'carbs'
         }
-        
+
         # Rename columns that exist
         for old_name, new_name in column_mapping.items():
             if old_name in df_subject.columns:
@@ -123,17 +126,59 @@ class Parser(BaseParser):
         # Convert date column to datetime
         df_subject['date'] = pd.to_datetime(df_subject['date'])
         
-        # Round dates UP to next 5-minute interval (same as CTR3)
+        # Round dates UP to next 5-minute interval
         df_subject['date'] = self.round_up_to_5min(df_subject['date'])
+        df_subject = df_subject.sort_values(by='date')
 
-        # Add subject ID
-        df_subject['id'] = subject_id
-        
         # Convert numeric columns to proper data types
         numeric_columns = ['CGM', 'basal', 'bolus', 'carbs']
         for col in numeric_columns:
             if col in df_subject.columns:
                 df_subject[col] = pd.to_numeric(df_subject[col], errors='coerce')
+            else:
+                df_subject[col] = np.nan
+
+        # Handle context_description_cache column based on device mode (sleep/exercise)
+        if 'DeviceMode' in df_subject.columns:
+            # Map device mode to context_description_cache with Control-IQ prefix for sleep and exercise
+            def map_device_mode(mode):
+                if mode == 'sleep':
+                    return 'Control-IQ Sleep Activity'
+                elif mode == 'exercise':
+                    return 'Control-IQ Exercise Activity'
+                else:
+                    return np.nan
+
+            df_subject['context_description_cache'] = df_subject['DeviceMode'].apply(map_device_mode)
+        else:
+            df_subject['context_description_cache'] = np.nan
+
+        df_subject = df_subject[['date', 'CGM', 'basal', 'bolus', 'carbs', 'context_description_cache']]
+        df_subject = df_subject.drop_duplicates(subset=['date', 'CGM', 'carbs', 'bolus', 'basal']).sort_values('date')
+        df_subject = df_subject.set_index('date')
+
+        # Resample into 5-minute intervals
+        agg_dict = {
+            'CGM': 'mean',
+            # There seems to be duplicate rows if several rows within a single 5-min interval, so we take mean value and not sum in this dataset
+            'basal': 'mean',
+            'bolus': 'mean',
+            'carbs': 'mean',
+            'context_description_cache': 'last',  # take last value in interval
+        }
+
+        # Resample to 5-minute intervals (data was already resampled, but with some missing / duplicate values)
+        df_subject = df_subject.resample('5min').agg(agg_dict)
+
+        # Check for 5-minute intervals
+        valid_intervals = (df_subject.index.to_series().diff().dropna() == pd.Timedelta("5min")).all()
+        if valid_intervals:
+            print(f"Subject {subject_id} has perfect 5-minute intervals")
+        else:
+            print(f"Warning: Subject {subject_id} does not have valid 5-minute intervals!")
+
+        # Add subject ID
+        df_subject['id'] = subject_id
 
         # Add missing columns with values from demographics where available
         demographics = get_subject_demographics()
@@ -156,24 +201,9 @@ class Parser(BaseParser):
 
         # Set insulin delivery algorithm
         df_subject['insulin_delivery_algorithm'] = 'Control-IQ'  # From manuscript: Control IQ system
-        
-        # Handle context_description_cache column based on device mode (sleep/exercise)
-        if 'DeviceMode' in df_subject.columns:
-            # Map device mode to context_description_cache with Control-IQ prefix for sleep and exercise
-            def map_device_mode(mode):
-                if mode == 'sleep':
-                    return 'Control-IQ Sleep Activity'
-                elif mode == 'exercise':
-                    return 'Control-IQ Exercise Activity'
-                else:
-                    return np.nan
-            
-            df_subject['context_description_cache'] = df_subject['DeviceMode'].apply(map_device_mode)
-        else:
-            df_subject['context_description_cache'] = np.nan
 
-        # Select and order the columns to match HUPA-UCM structure exactly
-        final_columns = ['date', 'id', 'CGM', 'basal', 'bolus', 'carbs', 'age', 'insulin_delivery_modality', 'insulin',
+        # Select and order the columns
+        final_columns = ['id', 'CGM', 'basal', 'bolus', 'carbs', 'age', 'insulin_delivery_modality', 'insulin',
                          'gender', 'insulin_delivery_device', 'cgm_device', 'source_file', 'context_description_cache',
                          'insulin_delivery_algorithm']
 
@@ -269,12 +299,13 @@ def main():
     # Process the data
     result = parser(file_path)
     result.to_csv('data/raw/AZT1D.csv', index=False)
-    
+
+    print(result)
+
     if not result.empty:
         print(f"\nProcessing completed successfully!")
         print(f"Total records processed: {len(result)}")
         print(f"Unique subjects: {result['id'].nunique()}")
-        print(f"Date range: {result['date'].min()} to {result['date'].max()}")
     else:
         print("No data was processed. Please check the file path and data format.")
 

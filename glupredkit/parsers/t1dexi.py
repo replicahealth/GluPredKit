@@ -129,15 +129,39 @@ class Parser(BaseParser):
                 df_subject['steps'] = np.nan
                 df_subject['calories_burned'] = np.nan
 
-            # Some rows might have gotten added nan values for the subject id after resampling
-            df_subject['id'] = subject_id
             df_subject.sort_index(inplace=True)
 
             # Ensuring homogenous time intervals
             df_subject = df_subject.resample('5min').asfreq()
 
-            processed_dfs.append(df_subject)
-            print(f"{count}/{len(self.subject_ids)} are prepared")
+            # Some rows might have gotten added nan values for the subject id after resampling
+            df_subject['id'] = subject_id
+
+            # Remove current and following 8 hrs of insulin if outlier
+            for dose_col in ['insulin', 'bolus']:
+                if dose_col in df_subject.columns:
+                    bad_idx = df_subject.index[(df_subject[dose_col] < 0) | (df_subject[dose_col] > 50)]
+                    if len(bad_idx) > 0:
+                        print(f"Warning: Subject {subject_id} has {len(bad_idx)} outlier {dose_col} values. "
+                              "We set the value and the following eight hours of data to nan.")
+                        rows_to_nan = []
+                        for idx in bad_idx:
+                            loc = df_subject.index.get_loc(idx)  # safe unless duplicates exist
+                            rows_to_nan.extend(range(loc, loc + 96))
+                        rows_to_nan = [i for i in rows_to_nan if i < len(df_subject)]
+                        insulin_col = df_subject.columns.get_loc(dose_col)
+                        df_subject.iloc[rows_to_nan, insulin_col] = np.nan
+
+            # Check for subjects without cgm or insulin data
+            cgm_present = df_subject['CGM'].notna().any()
+            insulin_present = (df_subject['bolus'].gt(0).any() or df_subject['basal'].gt(0).any())
+            if not cgm_present or not insulin_present:
+                print(f"Warning: Dropping subject {subject_id}. CGM present: {cgm_present}. "
+                      f"Insulin present: {insulin_present}")
+            else:
+                processed_dfs.append(df_subject)
+                print(f"{count}/{len(self.subject_ids)} are prepared")
+
             count += 1
 
         df_final = pd.concat(processed_dfs)
@@ -388,11 +412,11 @@ def normalize_device_name_and_get_algorithm(device):
     # OmniPod systems
     if 'OMNIPOD' in device_str:
         if 'OMNIPOD 5' in device_str:
-            return 'OmniPod 5', 'OmniPod 5'
+            return 'Omnipod 5', 'Omnipod 5'
         elif 'INSULET OMNIPOD INSULIN MANAGEMENT SYSTEM' in device_str:
-            return 'OmniPod', 'Bolus-Basal'
+            return 'Omnipod', 'Basal-Bolus'
         else:
-            return 'OmniPod', 'Bolus-Basal'
+            return 'Omnipod', 'Basal-Bolus'
     
     # Tandem t:slim X2 systems
     if 'TANDEM T:SLIM X2' in device_str:
@@ -407,7 +431,7 @@ def normalize_device_name_and_get_algorithm(device):
     
     # Other Tandem systems (like Tandem T:Slim without X2)
     if 'TANDEM T:SLIM' in device_str and 'X2' not in device_str:
-        return 'Tandem t:slim', np.nan
+        return 't:slim', np.nan
     
     # Medtronic systems
     if 'MEDTRONIC' in device_str:

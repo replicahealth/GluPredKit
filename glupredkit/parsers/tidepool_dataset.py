@@ -36,7 +36,7 @@ class Parser(BaseParser):
         count = 0
         for subject_id in train_dfs_dict.keys():
             subject_train_df = train_dfs_dict[subject_id]
-            subject_test_df = train_dfs_dict[subject_id]
+            subject_test_df = test_dfs_dict[subject_id]
 
             # add is_test column
             subject_train_df['is_test'] = False
@@ -208,21 +208,30 @@ class Parser(BaseParser):
         df_basal.set_index('date', inplace=True)
 
         # Dataframe carbohydrates
-        df_carbs = pd.DataFrame()
-        carb_dfs = []
-        for carb_col in ['nutrition.carbohydrate.net', 'carbInput']:
-            if carb_col in df.columns:
-                df_carbs = df[df['type'] == 'food'][['date', carb_col]]
-                df_carbs.rename(columns={carb_col: "carbs"}, inplace=True)
-                carb_dfs += [df_carbs]
+        possible_carb_cols = [col for col in df.columns if col in ['nutrition.carbohydrate.net', 'carbInput']]
+        main_carb_col = possible_carb_cols[0]
+        if len(possible_carb_cols) > 1:
+            # If there are available carbs in two columns, choose the column with more samples
+            # The reason we do not merge them is to avoid duplicate samples
+            n_samples_prev = 0
+            for col in possible_carb_cols:
+                df_carbs = df[['date', col]]
+                df_carbs = df_carbs.dropna(subset=[col])
+                print(f"{col}: {len(df_carbs)}")
+                if len(df_carbs) > n_samples_prev:
+                    main_carb_col = col
+                    n_samples_prev = len(df_carbs)
+        df_carbs = df[['date', main_carb_col]]
+        df_carbs = df_carbs.dropna(subset=[main_carb_col])
 
-        if len(carb_dfs) == 0:
-            assert ValueError("No carbohydrate data detected for subject! Inspect data.")
-        else:
-            df_carbs = pd.concat(carb_dfs)
+        n_carbs_with_duplicates = len(df_carbs)
+        df_carbs = df_carbs.drop_duplicates(subset=['date', main_carb_col], keep='first')
+        if n_carbs_with_duplicates > len(df_carbs):
+            print(f"Warning: Removed {n_carbs_with_duplicates - len(df_carbs)} when dropping duplicate carb samples")
+
+        df_carbs.rename(columns={main_carb_col: "carbs"}, inplace=True)
         df_carbs.sort_values(by='date', inplace=True, ascending=True)
         df_carbs.set_index('date', inplace=True)
-        #print("CARBS DF", df_carbs)
 
         # Dataframe workouts
         df_workouts = pd.DataFrame
@@ -338,4 +347,22 @@ def get_age_and_diagnosis(file_path, prefix, subject_id):
             age_of_diagnosis = max(0, age_of_diagnosis)  # Ensure non-negative
     
     return age, gender, age_of_diagnosis
+
+
+def main():
+    input_path = 'data/raw/Tidepool/'
+    parser = Parser()
+
+    # Process data
+    for prefix in ['HCL150', 'PA50', 'SAP100']:
+        df = parser(prefix, input_path)
+
+        # Save processed data
+        df.to_csv(f"Tidepool-JDRF-{prefix}.csv")
+
+
+if __name__ == "__main__":
+    main()
+
+
 

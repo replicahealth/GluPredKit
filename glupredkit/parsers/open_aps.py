@@ -193,20 +193,9 @@ class Parser(BaseParser):
                                         df = pd.merge(df, reservoir_df, on="date", how='outer')
                                         df['reservoir'] = df['reservoir'].ffill()
                                         break
-
-                        df['basal'] = df['basal'] / 12  # From U/hr to U
-
-                        # Merge bolus and basal into an insulin column
-                        df['insulin'] = df['bolus'].fillna(0) + df['basal']
-
-                        # Add id to a column
-                        df['id'] = subject_id
-
-                        merged_df = pd.concat([df, merged_df], ignore_index=False)
-                        print(f"Current memory usage: {get_memory_usage()} MB")
-
+                        merged_df = finalize_and_merge_subject_into_df(merged_df, df, subject_id)
             else:
-                id_name = file.split('.')[0]
+                subject_id = file.split('.')[0]
 
                 print(f'Processing {file}...')
                 zip_file_path = file_path + file
@@ -488,14 +477,8 @@ class Parser(BaseParser):
                     df.loc[df['temp'] == 'percentage', 'merged_basal'] = df['temp_basal'] * df['basal'] / 100
                     df.drop(columns=['temp', 'temp_basal', 'basal'], inplace=True)
                     df.rename(columns={'merged_basal': 'basal'}, inplace=True)
-                    df['basal'] = df['basal'] / 12  # From U/hr to U
 
-                    # Merge bolus and basal into an insulin column
-                    df['insulin'] = df['bolus'].fillna(0) + df['basal']
-                    df['id'] = id_name
-
-                    print(f"Current memory usage: {get_memory_usage()} MB")
-                    merged_df = pd.concat([df, merged_df], ignore_index=False)
+                merged_df = finalize_and_merge_subject_into_df(merged_df, df, subject_id)
 
         """
         # TODO: This should be removed to the CLI and check for all of the datasets
@@ -517,8 +500,34 @@ class Parser(BaseParser):
         else:
             print("There are IDs with invalid intervals.")
         """
+        merged_df['basal'] = merged_df['basal'] / 12  # From U/hr to U
+        merged_df['insulin'] = merged_df['bolus'].fillna(0) + merged_df['basal']
+        merged_df['source_file'] = 'OpenAPS'
         merged_df = add_demographics_to_df(file_path, merged_df)
         return merged_df
+
+def finalize_and_merge_subject_into_df(merged_df, subject_df, subject_id):
+    subject_df['id'] = subject_id
+
+    # Remove current and following 8 hrs of insulin if outlier
+    for dose_col in ['insulin', 'bolus']:
+        if dose_col in subject_df.columns:
+            bad_idx = subject_df.index[(subject_df[dose_col] < 0) | (subject_df[dose_col] > 50)]
+            if len(bad_idx) > 0:
+                print(f"Warning: Subject {subject_id} has {len(bad_idx)} outlier {dose_col} values. "
+                      "We set the value and the following eight hours of data to nan.")
+                rows_to_nan = []
+                for idx in bad_idx:
+                    loc = subject_df.index.get_loc(idx)  # safe unless duplicates exist
+                    rows_to_nan.extend(range(loc, loc + 96))
+                rows_to_nan = [i for i in rows_to_nan if i < len(subject_df)]
+                insulin_col = subject_df.columns.get_loc(dose_col)
+                subject_df.iloc[rows_to_nan, insulin_col] = np.nan
+
+    merged_df = pd.concat([subject_df, merged_df], ignore_index=False)
+    print(f"Current memory usage: {get_memory_usage()} MB")
+    return merged_df
+
 
 def get_memory_usage():
     process = psutil.Process(os.getpid())
@@ -847,11 +856,11 @@ def clean_algorithm(algorithm_raw):
 
     # Define mapping for algorithm cleaning
     algorithm_map = {
-        'A "traditional" OpenAPS rig using the oref0 algorithm (i.e. using a Raspberry Pi/Carelink; or an Edison/Explorer Board; etc.)': 'OpenAPS oref0',
-        'OpenAPS using the oref1 algorithm and hard-wired "on" SMB/UAM': 'OpenAPS oref1',
-        'Using UMA but not SMB from oref1': 'OpenAPS oref1 UMA',
-        'OpenAPS Oref1': 'OpenAPS oref1',
-        'Loopkit/Loop': 'Loop',
+        'A "traditional" OpenAPS rig using the oref0 algorithm (i.e. using a Raspberry Pi/Carelink; or an Edison/Explorer Board; etc.)': 'oref0',
+        'OpenAPS using the oref1 algorithm and hard-wired "on" SMB/UAM': 'oref1',
+        'Using UMA but not SMB from oref1': 'oref1',
+        'OpenAPS Oref1': 'oref1',
+        'Loopkit/Loop': 'LoopAlgorithm',
         'AndroidAPS': 'AndroidAPS',
         'Haps': 'Haps'
     }
@@ -865,6 +874,12 @@ def clean_algorithm(algorithm_raw):
         cleaned = algorithm_map.get(algo, algo)
         if cleaned not in cleaned_algorithms:  # Avoid duplicates
             cleaned_algorithms.append(cleaned)
+
+    result = ', '.join(cleaned_algorithms) if cleaned_algorithms else np.nan
+    if result == 'oref0, AndroidAPS':
+        # remove redundancy
+        result = 'oref0'
+    print(f"BEFORE: {algorithm_raw}, AFTER: {result}")
 
     return ', '.join(cleaned_algorithms) if cleaned_algorithms else np.nan
 
@@ -944,13 +959,34 @@ def extract_year(date_info):
 
 
 def main():
-    # Test the demographics
-    file_path = 'data/raw/OpenAPS/'
-    merged_df = pd.read_csv('data/raw/OpenAPS.csv')
-    merged_df['date'] = pd.to_datetime(merged_df['date'])
-    merged_df = add_demographics_to_df(file_path, merged_df)
+    input_path = 'data/raw/OpenAPS/'
+    parser = Parser()
 
-    merged_df.to_csv('OpenAPS.csv')
+    # Process data
+    try:
+        df = parser(input_path)
+
+        if df.empty:
+            print("No data was processed.")
+            return
+
+        # Delete meals below 0g of carbs
+        num_outlier_carbs = len(df[df['carbs'] < 0])
+        num_carbs = len(df[df['carbs'] != 0])
+        print(f'Found {num_outlier_carbs}/{num_carbs} = {round(num_outlier_carbs / num_carbs * 100, 1)}%')
+        df.loc[df['carbs'] < 0, 'carbs'] = np.nan
+
+        # Save processed data
+        df.to_csv("OpenAPS.csv")
+
+    except Exception as e:
+        print(f"Error processing OpenAPS data: {e}")
+        return None
+
+    #merged_df = pd.read_csv('data/raw/OpenAPS.csv')
+    #merged_df['date'] = pd.to_datetime(merged_df['date'])
+    #merged_df = add_demographics_to_df(input_path, merged_df)
+    #merged_df.to_csv('OpenAPS.csv')
 
 
 if __name__ == "__main__":

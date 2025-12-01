@@ -39,6 +39,11 @@ class Parser(BaseParser):
 
         merged_df = pd.concat(all_resampled_dfs, ignore_index=True)
         merged_df['source_file'] = 'T1D-UOM'
+
+        # Set the one 68 U bolus dose as basal instead
+        merged_df.loc[merged_df['bolus'] > 60, 'basal'] = 68
+        merged_df.loc[merged_df['bolus'] > 60, 'bolus'] = np.nan
+
         return merged_df
 
     def get_resampled_df_for_subject(self, file_path, subject_id, demographics_df):
@@ -77,7 +82,7 @@ class Parser(BaseParser):
         # The paper states that: "This dataset includes participants using both multiple daily injections (MDI) and
         # insulin pumps operating in open-loop mode"
         merged_df['insulin_delivery_algorithm'] = merged_df['insulin_type_basal'].map({
-            'Rapid-Acting': 'basal-bolus',
+            'Rapid-Acting': 'Basal-Bolus',
             'Long-Acting': 'MDI'
         })
         merged_df['insulin_delivery_modality'] = merged_df['insulin_type_basal'].map({
@@ -206,19 +211,19 @@ class Parser(BaseParser):
         """
         data = [
             {'Participant ID': '2301', 'gender': 'Female', 'age': 25, 'Sensor': 'CGM',
-             'insulin_delivery_device': 'Tandem t:slim X2'},
+             'insulin_delivery_device': 't:slim X2'},
             {'Participant ID': '2302', 'gender': 'Female', 'age': 29, 'Sensor': 'Flash',
-             'insulin_delivery_device': 'MDI'},
+             'insulin_delivery_device': 'Multiple Daily Injections'},
             {'Participant ID': '2303', 'gender': 'Female', 'age': 29, 'Sensor': 'CGM',
              'insulin_delivery_device': 'N/A'},
             {'Participant ID': '2304', 'gender': 'Female', 'age': 29, 'Sensor': 'Flash',
              'insulin_delivery_device': 'MiniMed 780G'},
             {'Participant ID': '2305', 'gender': 'Female', 'age': 50, 'Sensor': 'Flash',
-             'insulin_delivery_device': 'MDI'},
+             'insulin_delivery_device': 'Multiple Daily Injections'},
             {'Participant ID': '2306', 'gender': 'Female', 'age': 50, 'Sensor': 'Flash',
-             'insulin_delivery_device': 'MDI'},
+             'insulin_delivery_device': 'Multiple Daily Injections'},
             {'Participant ID': '2307', 'gender': 'Female', 'age': 61, 'Sensor': 'CGM',
-             'insulin_delivery_device': 'Tandem t:slim X2'},
+             'insulin_delivery_device': 't:slim X2'},
             {'Participant ID': '2308', 'gender': 'Male', 'age': 59, 'Sensor': 'CGM',
              'insulin_delivery_device': 'MiniMed 780G'},
             {'Participant ID': '2309', 'gender': 'Female', 'age': 59, 'Sensor': 'CGM',
@@ -226,19 +231,19 @@ class Parser(BaseParser):
             {'Participant ID': '2310', 'gender': 'Male', 'age': 70, 'Sensor': 'CGM',
              'insulin_delivery_device': 'MiniMed 780G'},
             {'Participant ID': '2313', 'gender': 'Male', 'age': 39, 'Sensor': 'Flash',
-             'insulin_delivery_device': 'MDI'},
+             'insulin_delivery_device': 'Multiple Daily Injections'},
             {'Participant ID': '2314', 'gender': 'Male', 'age': 61, 'Sensor': 'Flash',
-             'insulin_delivery_device': 'MDI'},
+             'insulin_delivery_device': 'Multiple Daily Injections'},
             {'Participant ID': '2320', 'gender': 'Female', 'age': 46, 'Sensor': 'CGM',
              'insulin_delivery_device': 'Omnipod 5'},
             {'Participant ID': '2401', 'gender': 'Male', 'age': 46, 'Sensor': 'Flash',
-             'insulin_delivery_device': 'MDI'},
+             'insulin_delivery_device': 'Multiple Daily Injections'},
             {'Participant ID': '2403', 'gender': 'Male', 'age': 23, 'Sensor': 'Flash',
-             'insulin_delivery_device': 'MDI'},
+             'insulin_delivery_device': 'Multiple Daily Injections'},
             {'Participant ID': '2404', 'gender': 'Female', 'age': 37, 'Sensor': 'Flash',
-             'insulin_delivery_device': 'MDI'},
+             'insulin_delivery_device': 'Multiple Daily Injections'},
             {'Participant ID': '2405', 'gender': 'Male', 'age': 52, 'Sensor': 'Flash',
-             'insulin_delivery_device': 'MDI'}
+             'insulin_delivery_device': 'Multiple Daily Injections'}
         ]
         df = pd.DataFrame(data)
         return df[df['Participant ID'] == subject_id].iloc[0]
@@ -262,6 +267,8 @@ def main():
         # Save processed data
         output_file = os.path.join(input_path, "T1D-UOM.csv")
         df.to_csv(output_file, index=True)
+
+        print("OUTLIER", df[df['bolus'] > 30])
 
         print(f"✓ Saved T1D-UOM dataframe to: {output_file}")
         print(f"Dataset shape: {df.shape}")

@@ -37,6 +37,10 @@ class Parser(BaseParser):
                 # skip this iteration
                 continue
 
+            if subject_id == 'P17':
+                # Skip subject due to missing insulin data
+                continue
+
             df = pd.read_csv(subject_file_path)
             resampled_df = self.resample_df(df, subject_id=subject_id)
 
@@ -67,11 +71,11 @@ class Parser(BaseParser):
 
     def get_insulin_delivery_algorithm_from_insulin_delivery_device(self, df):
         mapping = {
-            'Medtronic MiniMed 780G': 'SmartGuard™ Auto Mode',
-            'Medtronic MiniMed 640G': 'SmartGuard™ Predictive Low Glucose Suspend',
+            'MiniMed 780G': '780G Advanced HCL',
+            'MiniMed 640G': '640G',
             # Tandem t:slim X2 could be using either Control-IQ or Basal-IQ
-            'Omnipod Eros': 'basal-bolus',
-            'Omnipod Dash': 'basal-bolus',
+            'Omnipod Eros': 'Basal-Bolus',
+            'Omnipod Dash': 'Basal-Bolus',
             'Omnipod 5': 'Omnipod 5'
         }
         df['insulin_delivery_algorithm'] = df['insulin_delivery_device'].map(mapping)
@@ -146,6 +150,9 @@ class Parser(BaseParser):
         # keep only if in allowed, else None
         df['cgm_device'] = df['device'].where(df['device'].isin(cgm_devices))
         df['insulin_delivery_device'] = df['device'].where(df['device'].isin(insulin_delivery_devices))
+        df['insulin_delivery_device'] = df['insulin_delivery_device'].replace('Tandem t:slim X2', 't:slim X2')
+        df['insulin_delivery_device'] = df['insulin_delivery_device'].replace('Medtronic MiniMed 640G', 'MiniMed 640G')
+        df['insulin_delivery_device'] = df['insulin_delivery_device'].replace('Medtronic MiniMed 780G', 'MiniMed 780G')
 
         # Convert units
         df['bg'] = df['bg'] * 18.018
@@ -167,7 +174,6 @@ class Parser(BaseParser):
                 'insulin_delivery_device': 'last',
             })
         )
-        resampled_df['id'] = subject_id
         cols_to_fill = ['cgm_device', 'insulin_delivery_device']
         resampled_df[cols_to_fill] = resampled_df[cols_to_fill].ffill().bfill()
 
@@ -201,6 +207,23 @@ class Parser(BaseParser):
             'hr': 'heartrate',
             'activity': 'workout_label'
         })
+
+        # Set negative insulin values to nan (there are two of them in the entire dataset)
+        # We also set the following 8 hours of data after the negative dose to nan
+        bad_idx = resampled_df.index[resampled_df['insulin'] < 0]
+        if len(bad_idx) > 0:
+            print(f"Warning: Subject {subject_id} has {len(bad_idx)} negative insulin values. "
+                  "We set the value and the following eight hours of data to nan.")
+            rows_to_nan = []
+            for idx in bad_idx:
+                loc = resampled_df.index.get_loc(idx)  # safe unless duplicates exist
+                rows_to_nan.extend(range(loc, loc + 96))
+            rows_to_nan = [i for i in rows_to_nan if i < len(resampled_df)]
+            insulin_col = resampled_df.columns.get_loc('insulin')
+            resampled_df.iloc[rows_to_nan, insulin_col] = np.nan
+
+        resampled_df['id'] = subject_id
+
         return resampled_df
 
     def get_cgm_devices_from_devices(self, unique_devices):

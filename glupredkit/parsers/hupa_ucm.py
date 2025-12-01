@@ -42,6 +42,11 @@ class Parser(BaseParser):
                 match = re.search(r'HUPA(\d+)P\.csv', filename)
                 if match:
                     subject_id = int(match.group(1))  # Convert to integer to remove leading zeros
+
+                    # Skip subjects without insulin data
+                    if subject_id in [11, 15, 18]:
+                        print(f"\nWarning: Skipping subject {subject_id} due to missing insulin data")
+                        continue
                 else:
                     print(f"\nWarning: Could not extract subject ID from {filename}")
                     continue
@@ -99,26 +104,23 @@ class Parser(BaseParser):
         
         # Convert date column to datetime
         df_subject['date'] = pd.to_datetime(df_subject['date'])
-        
-        # Add subject ID
-        df_subject['id'] = subject_id
-        
+
         # Convert numeric columns to proper data types
         numeric_columns = ['CGM', 'calories_burned', 'heartrate', 'steps', 'basal', 'bolus', 'carbs']
         for col in numeric_columns:
             if col in df_subject.columns:
                 df_subject[col] = pd.to_numeric(df_subject[col], errors='coerce')
-        
+            else:
+                df_subject[col] = np.nan
+
         # Replace 0.0 with NaN for relevant columns (no data vs actual zero)
         zero_to_nan_columns = ['bolus', 'carbs']
         for col in zero_to_nan_columns:
-            if col in df_subject.columns:
-                df_subject[col] = df_subject[col].replace(0.0, np.nan)
+            df_subject[col] = df_subject[col].replace(0.0, np.nan)
         
         # Multiply carb values by 10
-        if 'carbs' in df_subject.columns:
-            df_subject['carbs'] = df_subject['carbs'] * 10
-        
+        df_subject['carbs'] = df_subject['carbs'] * 10
+
         # Add demographic information (excluding gender and age_of_diagnosis for main df)
         demographics = get_subject_demographics()
         if subject_id in demographics:
@@ -144,6 +146,23 @@ class Parser(BaseParser):
         df_subject['cgm_device'] = 'FreeStyle Libre 2'
         df_subject['insulin'] = df_subject['bolus'].fillna(0) + df_subject['basal']
 
+        # Set negative insulin values to nan (there are two of them in the entire dataset)
+        # We also set the following 8 hours of data after the negative dose to nan
+        bad_idx = df_subject.index[df_subject['insulin'] < 0]
+        if len(bad_idx) > 0:
+            print(f"Warning: Subject {subject_id} has {len(bad_idx)} negative insulin values. "
+                  "We set the value and the following eight hours of data to nan.")
+            rows_to_nan = []
+            for idx in bad_idx:
+                loc = df_subject.index.get_loc(idx)  # safe unless duplicates exist
+                rows_to_nan.extend(range(loc, loc + 96))
+            rows_to_nan = [i for i in rows_to_nan if i < len(df_subject)]
+            insulin_col = df_subject.columns.get_loc('insulin')
+            df_subject.iloc[rows_to_nan, insulin_col] = np.nan
+
+        # Add subject ID
+        df_subject['id'] = subject_id
+
         # Select and order the columns we want (excluding gender and age_of_diagnosis)
         final_columns = ['date', 'id', 'CGM', 'calories_burned', 'heartrate', 'steps', 'basal', 'bolus', 'carbs',
                          'age', 'weight', 'height', 'insulin_delivery_modality', 'insulin',
@@ -166,21 +185,21 @@ def get_subject_demographics():
         9: {'gender': 'Female', 'age': 41.2, 'weight_kg': 64.0, 'height_cm': 165, 'dx_time': 30.7, 'insulin_delivery': 'SAP', 'insulin_delivery_device': 'Medtronic Pump'},
         10: {'gender': 'Female', 'age': 41.9, 'weight_kg': 51.0, 'height_cm': 164, 'dx_time': 15.2, 'insulin_delivery': 'SAP', 'insulin_delivery_device': 'Medtronic Pump'},
         11: {'gender': 'Female', 'age': 35.0, 'weight_kg': 56.0, 'height_cm': 153, 'dx_time': 27.3, 'insulin_delivery': 'SAP', 'insulin_delivery_device': 'Roche Pump'},
-        14: {'gender': 'Female', 'age': 50.0, 'weight_kg': 61.0, 'height_cm': 155, 'dx_time': 12.9, 'insulin_delivery': 'MDI', 'insulin_delivery_device': 'Insulin Pen'},
-        15: {'gender': 'Female', 'age': 43.1, 'weight_kg': 58.6, 'height_cm': 162, 'dx_time': 11.2, 'insulin_delivery': 'MDI', 'insulin_delivery_device': 'Insulin Pen'},
+        14: {'gender': 'Female', 'age': 50.0, 'weight_kg': 61.0, 'height_cm': 155, 'dx_time': 12.9, 'insulin_delivery': 'MDI', 'insulin_delivery_device': 'Multiple Daily Injections'},
+        15: {'gender': 'Female', 'age': 43.1, 'weight_kg': 58.6, 'height_cm': 162, 'dx_time': 11.2, 'insulin_delivery': 'MDI', 'insulin_delivery_device': 'Multiple Daily Injections'},
         16: {'gender': 'Female', 'age': 29.9, 'weight_kg': 64.9, 'height_cm': 157, 'dx_time': 20.1, 'insulin_delivery': 'SAP', 'insulin_delivery_device': 'Medtronic Pump'},
-        17: {'gender': 'Female', 'age': 26.3, 'weight_kg': 61.8, 'height_cm': 167, 'dx_time': 24.2, 'insulin_delivery': 'MDI', 'insulin_delivery_device': 'Insulin Pen'},
+        17: {'gender': 'Female', 'age': 26.3, 'weight_kg': 61.8, 'height_cm': 167, 'dx_time': 24.2, 'insulin_delivery': 'MDI', 'insulin_delivery_device': 'Multiple Daily Injections'},
         18: {'gender': 'Female', 'age': 32.3, 'weight_kg': 57.2, 'height_cm': 167, 'dx_time': 25.6, 'insulin_delivery': 'SAP', 'insulin_delivery_device': np.nan},
-        19: {'gender': 'Male', 'age': 18.0, 'weight_kg': 69.7, 'height_cm': 168, 'dx_time': 7.6, 'insulin_delivery': 'MDI', 'insulin_delivery_device': 'Insulin Pen'},
-        20: {'gender': 'Male', 'age': 45.7, 'weight_kg': 71.6, 'height_cm': 168, 'dx_time': 13.5, 'insulin_delivery': 'MDI', 'insulin_delivery_device': 'Insulin Pen'},
-        21: {'gender': 'Female', 'age': 48.6, 'weight_kg': 57.0, 'height_cm': 153, 'dx_time': 2.2, 'insulin_delivery': 'MDI', 'insulin_delivery_device': 'Insulin Pen'},
+        19: {'gender': 'Male', 'age': 18.0, 'weight_kg': 69.7, 'height_cm': 168, 'dx_time': 7.6, 'insulin_delivery': 'MDI', 'insulin_delivery_device': 'Multiple Daily Injections'},
+        20: {'gender': 'Male', 'age': 45.7, 'weight_kg': 71.6, 'height_cm': 168, 'dx_time': 13.5, 'insulin_delivery': 'MDI', 'insulin_delivery_device': 'Multiple Daily Injections'},
+        21: {'gender': 'Female', 'age': 48.6, 'weight_kg': 57.0, 'height_cm': 153, 'dx_time': 2.2, 'insulin_delivery': 'MDI', 'insulin_delivery_device': 'Multiple Daily Injections'},
         22: {'gender': 'Male', 'age': 59.6, 'weight_kg': 77.6, 'height_cm': 179, 'dx_time': 14.6, 'insulin_delivery': 'SAP', 'insulin_delivery_device': 'Roche Pump'},
-        23: {'gender': 'Male', 'age': 22.9, 'weight_kg': 55.5, 'height_cm': 173, 'dx_time': 0.8, 'insulin_delivery': 'MDI', 'insulin_delivery_device': 'Insulin Pen'},
-        24: {'gender': 'Male', 'age': 47.9, 'weight_kg': 80.5, 'height_cm': 174, 'dx_time': 35.9, 'insulin_delivery': 'MDI', 'insulin_delivery_device': 'Insulin Pen'},
+        23: {'gender': 'Male', 'age': 22.9, 'weight_kg': 55.5, 'height_cm': 173, 'dx_time': 0.8, 'insulin_delivery': 'MDI', 'insulin_delivery_device': 'Multiple Daily Injections'},
+        24: {'gender': 'Male', 'age': 47.9, 'weight_kg': 80.5, 'height_cm': 174, 'dx_time': 35.9, 'insulin_delivery': 'MDI', 'insulin_delivery_device': 'Multiple Daily Injections'},
         25: {'gender': 'Male', 'age': 38.1, 'weight_kg': 104.8, 'height_cm': 188, 'dx_time': 20.3, 'insulin_delivery': 'SAP', 'insulin_delivery_device': 'Roche Pump'},
-        26: {'gender': 'Female', 'age': 61.8, 'weight_kg': 80.0, 'height_cm': 165, 'dx_time': 21.5, 'insulin_delivery': 'MDI', 'insulin_delivery_device': 'Insulin Pen'},
-        27: {'gender': 'Male', 'age': 26.4, 'weight_kg': 76.0, 'height_cm': 185, 'dx_time': 23.7, 'insulin_delivery': 'MDI', 'insulin_delivery_device': 'Insulin Pen'},
-        28: {'gender': 'Female', 'age': 21.2, 'weight_kg': 56.0, 'height_cm': 160, 'dx_time': 2.0, 'insulin_delivery': 'MDI', 'insulin_delivery_device': 'Insulin Pen'}
+        26: {'gender': 'Female', 'age': 61.8, 'weight_kg': 80.0, 'height_cm': 165, 'dx_time': 21.5, 'insulin_delivery': 'MDI', 'insulin_delivery_device': 'Multiple Daily Injections'},
+        27: {'gender': 'Male', 'age': 26.4, 'weight_kg': 76.0, 'height_cm': 185, 'dx_time': 23.7, 'insulin_delivery': 'MDI', 'insulin_delivery_device': 'Multiple Daily Injections'},
+        28: {'gender': 'Female', 'age': 21.2, 'weight_kg': 56.0, 'height_cm': 160, 'dx_time': 2.0, 'insulin_delivery': 'MDI', 'insulin_delivery_device': 'Multiple Daily Injections'}
     }
     
     # Convert units: kg to lbs (1 kg = 2.20462 lbs), cm to feet (1 cm = 0.0328084 feet)
@@ -244,6 +263,14 @@ def main():
 
     # Process the data
     result = parser(file_path)
+
+    # Delete meals above 500g of carbs
+    num_outlier_carbs = len(result[result['carbs'] > 500])
+    num_carbs = len(result[result['carbs'] > 0])
+    print(f'Found {num_outlier_carbs}/{num_carbs} = {round(num_outlier_carbs/num_carbs*100,1)}% carb outliers')
+    result.loc[result['carbs'] > 500, 'carbs'] = np.nan
+
+    # Save
     result.to_csv('data/raw/HUPA-UCM.csv', index=False)
 
     if not result.empty:

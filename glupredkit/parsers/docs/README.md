@@ -119,9 +119,41 @@ There are 11 subjects from the control arm in the data for the Bionic Pancreas. 
 - It is assumed that subjects using MiniMed 670G is using that with the SmartGuard function active 
 
 
+## BrisT1D
+
+Range checks and handling: 
+- We found two negative insulin doses in the dataset, within subject P12. These are set to nan, and the following eight hours are also set to nan for each of the negative doses.
 
 
-### General To Dos
+
+## HUPA UCM
+
+Range checks and handling: 
+- We found negative insulin doses within subject 17. These are set to nan, and the following eight hours are also set to nan for each of the negative doses.
+- Out of a total of 2591 non-zero carbohydrate samples, 67 of them were higher than 500g. These were set to nan. This accounts to 2.6% of the non-zero carbohydrate samples.
+- Be aware that MDI insulin data is registered manually, which might be inaccurate
+
+
+## T1D UOM 
+
+Range checks and handling: 
+- We found an insulin dose of 68U, and it seems very likely that this dose is misreported as bolus when it actually should be a basal dose because a lot of the basal doses are 68U and the basal dose from that date is missing and the time of day fits with the basal dose timing. Hence, we set that as a basal dose. 
+- Be aware that MDI insulin data is registered manually, which might be inaccurate
+
+
+## OpenAPS
+
+Processing notes: 
+- Out of a total of XX non-zero carbohydrate samples, XX of them were lower than 0g. These were set to nan. This accounts to YYY% of the non-zero carbohydrate samples.
+
+
+## Tidepool Dataset
+
+Processing notes: 
+- There are two possible sources to carbohydrate data in this dataset. One contains data from the pump bolus calculator, while the other contains data from Apple Health. We have observed some potential overlaps between them. Hence, for each individual, we use only the data source with the most values to avoid duplicates. We also drop values that have the exact same carb value and date, as this most likely is due to duplicate values (for example, overlapping samples from separate uploads, duplicates in data storage because they were stored from multiple sources like from the watch and the phone, etc.). 
+
+
+## General To Dos
 
 - Add a snapshot of a few rows for each dataset to show the dataset format
 - Improve the API for adding ice and iob values, using the loop to python api (with insulin type if available!)

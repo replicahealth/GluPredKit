@@ -35,7 +35,16 @@ class Parser(BaseParser):
         basal_data = self.read_basal_data(file_path)
         bolus_data = self.read_bolus_data(file_path)
         meal_data = self.read_meal_data(file_path)
-        
+
+        print("BOLUS DATA MAX", bolus_data['bolus'].max())
+        print(bolus_data[bolus_data['bolus'] > 20])
+
+        print("BASAL")
+        print(np.sort(basal_data['basal'].unique()))
+        print(basal_data[basal_data['basal'] < 0])
+        print(basal_data[basal_data['basal'] > 0.8])
+
+
         print(f"Loaded CGM: {len(cgm_data)} records")
         print(f"Loaded Basal: {len(basal_data)} records") 
         print(f"Loaded Bolus: {len(bolus_data)} records")
@@ -267,6 +276,8 @@ class Parser(BaseParser):
                     age_of_diagnosis = pd.to_numeric(row.get('Age at Diagnosis'), errors='coerce')
                     ethnicity = row.get('Race')
 
+                    print(f"Subject {subject_id}: age {age_at_enrollment}, weight {weight_kg}")
+
                     # Determine insulin type based on enrollment data
                     insulin_type = np.nan
                     if pd.notna(row.get('Novolog')) and row.get('Novolog') == 1.0:
@@ -293,7 +304,7 @@ class Parser(BaseParser):
         df_processed['insulin_delivery_modality'] = 'AID'
         df_processed['insulin_delivery_device'] = 'Roche Accu-Check'
         df_processed['insulin_delivery_algorithm'] = 'JAEB DiA Control-to-Range'
-        df_processed['cgm_device'] = 'Dexcom G4 Platinum'
+        df_processed['cgm_device'] = 'Dexcom G4'
         df_processed['source_file'] = 'CTR3'
         
         # Calculate total insulin (basal + bolus)
@@ -410,6 +421,8 @@ def main():
     # Process the data
     result = parser(file_path)
     result.to_csv('data/raw/CTR3.csv', index=False)
+
+    print(result[result['basal'] > 1])
 
     if not result.empty:
         print(f"\nProcessing completed successfully!")
