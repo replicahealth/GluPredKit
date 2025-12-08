@@ -32,26 +32,15 @@ class Parser(BaseParser):
         
         # Read all relevant data files
         cgm_data = self.read_cgm_data(file_path)
-        basal_data = self.read_basal_data(file_path)
-        bolus_data = self.read_bolus_data(file_path)
+        insulin_data = self.read_insulin_data(file_path)
         meal_data = self.read_meal_data(file_path)
 
-        print("BOLUS DATA MAX", bolus_data['bolus'].max())
-        print(bolus_data[bolus_data['bolus'] > 20])
-
-        print("BASAL")
-        print(np.sort(basal_data['basal'].unique()))
-        print(basal_data[basal_data['basal'] < 0])
-        print(basal_data[basal_data['basal'] > 0.8])
-
-
         print(f"Loaded CGM: {len(cgm_data)} records")
-        print(f"Loaded Basal: {len(basal_data)} records") 
-        print(f"Loaded Bolus: {len(bolus_data)} records")
+        print(f"Loaded Insulin: {len(insulin_data)} records")
         print(f"Loaded Meal: {len(meal_data)} records")
         
         # Merge all data on DeidentID and timestamp
-        df_merged = self.merge_all_data(cgm_data, basal_data, bolus_data, meal_data)
+        df_merged = self.merge_all_data(cgm_data, insulin_data, meal_data)
         
         if df_merged.empty:
             print("Error: No data was merged successfully!")
@@ -61,7 +50,10 @@ class Parser(BaseParser):
         
         # Process and format the merged data
         df_final = self.process_merged_data(df_merged)
-        
+
+        # Remove outlier insulin data and following 8 hours of data
+        df_final = self.remove_outliers_and_following(df_final, ['insulin'], extend_lim=8*12)
+
         # Store in df
         self.df = df_final.copy()
 
@@ -78,51 +70,21 @@ class Parser(BaseParser):
         df = pd.read_csv(cgm_file, sep='|')
         df['timestamp'] = pd.to_datetime(df['InternalTime'])
         return df[['DeidentID', 'timestamp', 'CGM']].rename(columns={'DeidentID': 'id'})
-    
-    def read_basal_data(self, file_path):
-        """Read basal insulin data from MonitorBasalBolus.txt"""
-        basal_file = os.path.join(file_path, "MonitorBasalBolus.txt")
+
+    def read_insulin_data(self, file_path):
+        """Read basal insulin data from MonitorTotalBolus.txt"""
+        basal_file = os.path.join(file_path, "MonitorTotalBolus.txt")
         if not os.path.exists(basal_file):
             print(f"Warning: Basal file not found at {basal_file}")
             return pd.DataFrame()
-        
+
         df = pd.read_csv(basal_file, sep='|')
         df['timestamp'] = pd.to_datetime(df['LocalDeliveredDtTm'])
         return df[['DeidentID', 'timestamp', 'DeliveredValue']].rename(columns={
             'DeidentID': 'id',
-            'DeliveredValue': 'basal'
+            'DeliveredValue': 'insulin'
         })
-    
-    def read_bolus_data(self, file_path):
-        """Read bolus insulin data from MonitorMealBolus.txt and MonitorCorrectionBolus.txt"""
-        meal_bolus_file = os.path.join(file_path, "MonitorMealBolus.txt")
-        correction_bolus_file = os.path.join(file_path, "MonitorCorrectionBolus.txt")
 
-        bolus_data = []
-        
-        # Read meal bolus data
-        if os.path.exists(meal_bolus_file):
-            df_meal = pd.read_csv(meal_bolus_file, sep='|')
-            df_meal['timestamp'] = pd.to_datetime(df_meal['LocalDeliveredDtTm'])
-            df_meal['bolus_type'] = 'meal'
-            bolus_data.append(df_meal[['DeidentID', 'timestamp', 'DeliveredValue', 'bolus_type']])
-        
-        # Read correction bolus data
-        if os.path.exists(correction_bolus_file):
-            df_correction = pd.read_csv(correction_bolus_file, sep='|')
-            df_correction['timestamp'] = pd.to_datetime(df_correction['LocalDeliveredDtTm'])
-            df_correction['bolus_type'] = 'correction'
-            bolus_data.append(df_correction[['DeidentID', 'timestamp', 'DeliveredValue', 'bolus_type']])
-        
-        if bolus_data:
-            df_combined = pd.concat(bolus_data, ignore_index=True)
-            return df_combined.rename(columns={
-                'DeidentID': 'id',
-                'DeliveredValue': 'bolus'
-            })
-        else:
-            return pd.DataFrame()
-    
     def read_meal_data(self, file_path):
         """Read meal/carb data from MonitorMeal.txt"""
         meal_file = os.path.join(file_path, "MonitorMeal.txt")
@@ -143,7 +105,7 @@ class Parser(BaseParser):
         # This ensures rounding UP to the next 5-minute mark
         return (timestamp_series + pd.Timedelta(minutes=4, seconds=59)).dt.floor('5min')
     
-    def merge_all_data(self, cgm_data, basal_data, bolus_data, meal_data):
+    def merge_all_data(self, cgm_data, insulin_data, meal_data):
         """Merge all data sources on id and timestamp with forward aggregation"""
         all_data = []
         
@@ -160,30 +122,17 @@ class Parser(BaseParser):
             all_data.append(cgm_grouped.rename(columns={'timestamp_rounded': 'timestamp'}))
         
         # Process basal data - sum over previous 5 minutes
-        if not basal_data.empty:
-            basal_clean = basal_data.dropna(subset=['id', 'timestamp']).copy()
-            basal_clean['timestamp_rounded'] = self.round_up_to_5min(basal_clean['timestamp'])
+        if not insulin_data.empty:
+            insulin_clean = insulin_data.dropna(subset=['id', 'timestamp']).copy()
+            insulin_clean['timestamp_rounded'] = self.round_up_to_5min(insulin_clean['timestamp'])
             
             # Sum basal insulin within each 5-minute window
-            basal_grouped = basal_clean.groupby(['id', 'timestamp_rounded']).agg({
-                'basal': 'sum'
+            insulin_grouped = insulin_clean.groupby(['id', 'timestamp_rounded']).agg({
+                'insulin': 'sum'
             }).reset_index()
             
-            all_data.append(basal_grouped.rename(columns={'timestamp_rounded': 'timestamp'}))
-        
-        # Process bolus data - sum over previous 5 minutes
-        if not bolus_data.empty:
-            bolus_clean = bolus_data.dropna(subset=['id', 'timestamp']).copy()
-            bolus_clean['timestamp_rounded'] = self.round_up_to_5min(bolus_clean['timestamp'])
-            
-            # Sum boluses and combine types within each 5-minute window
-            bolus_grouped = bolus_clean.groupby(['id', 'timestamp_rounded']).agg({
-                'bolus': 'sum',
-                'bolus_type': lambda x: ', '.join(x.unique())
-            }).reset_index()
-            
-            all_data.append(bolus_grouped.rename(columns={'timestamp_rounded': 'timestamp'}))
-        
+            all_data.append(insulin_grouped.rename(columns={'timestamp_rounded': 'timestamp'}))
+
         # Process meal data - sum carbs over previous 5 minutes
         if not meal_data.empty:
             meal_clean = meal_data.dropna(subset=['id', 'timestamp']).copy()
@@ -229,20 +178,20 @@ class Parser(BaseParser):
         return pd.DataFrame()
     
     def process_merged_data(self, df_merged):
-        """Process and format merged data to match HUPA-UCM structure"""
+        """Process and format merged data"""
         df_processed = df_merged.copy()
         
         # Rename timestamp to date
         df_processed = df_processed.rename(columns={'timestamp': 'date'})
         
         # Convert numeric columns to proper data types
-        numeric_columns = ['CGM', 'basal', 'bolus', 'carbs']
+        numeric_columns = ['CGM', 'insulin', 'carbs']
         for col in numeric_columns:
             if col in df_processed.columns:
                 df_processed[col] = pd.to_numeric(df_processed[col], errors='coerce')
         
         # Replace 0.0 with NaN for relevant columns (no data vs actual zero)
-        zero_to_nan_columns = ['bolus', 'carbs']
+        zero_to_nan_columns = ['carbs']
         for col in zero_to_nan_columns:
             if col in df_processed.columns:
                 df_processed[col] = df_processed[col].replace(0.0, np.nan)
@@ -306,75 +255,13 @@ class Parser(BaseParser):
         df_processed['insulin_delivery_algorithm'] = 'JAEB DiA Control-to-Range'
         df_processed['cgm_device'] = 'Dexcom G4'
         df_processed['source_file'] = 'CTR3'
-        
-        # Calculate total insulin (basal + bolus)
-        df_processed['insulin'] = df_processed['bolus'].fillna(0) + df_processed['basal']
 
         # Select and order the columns to match HUPA-UCM structure exactly
-        final_columns = ['date', 'id', 'CGM', 'basal', 'bolus', 'carbs', 'age', 'weight', 'height',
-                         'insulin_delivery_modality', 'insulin', 'insulin_delivery_device', 'cgm_device', 'source_file',
+        final_columns = ['date', 'id', 'CGM', 'insulin', 'carbs', 'age', 'weight', 'height',
+                         'insulin_delivery_modality', 'insulin_delivery_device', 'cgm_device', 'source_file',
                          'insulin_type_basal', 'insulin_type_bolus', 'gender', 'age_of_diagnosis', 'ethnicity']
         df_processed = df_processed[final_columns]
         return df_processed.sort_values(['id', 'date']).reset_index(drop=True)
-    
-    def create_demographics_df(self):
-        """Create demographics dataframe with one row per unique ID."""
-        
-        # Get unique subject IDs from processed data
-        unique_ids = self.df_expanded['id'].unique() if not self.df_expanded.empty else []
-        
-        # Load enrollment data for demographics
-        enrollment_data = self.load_enrollment_data()
-        
-        demographics_data = []
-        for subject_id in unique_ids:
-            enrollment_row = enrollment_data[enrollment_data['DeidentID'] == subject_id]
-            
-            if not enrollment_row.empty:
-                row = enrollment_row.iloc[0]
-                # Map gender 
-                gender = 'Male' if row.get('Gender') == 'M' else ('Female' if row.get('Gender') == 'F' else np.nan)
-                # Calculate TDD (Total Daily Dose) 
-                daily_ins = pd.to_numeric(row.get('DailyIns'), errors='coerce')
-                daily_basal = pd.to_numeric(row.get('Dailybasal'), errors='coerce')
-                tdd = np.nan
-                if pd.notna(daily_ins) and pd.notna(daily_basal):
-                    tdd = daily_ins + daily_basal
-                elif pd.notna(daily_ins):
-                    tdd = daily_ins
-                
-                demographics_data.append({
-                    'id': subject_id,
-                    'gender': gender,
-                    'age_of_diagnosis': pd.to_numeric(row.get('Age at Diagnosis'), errors='coerce'),
-                    'TDD': tdd,
-                    'ethnicity': row.get('Race', np.nan),
-                    'source_file': 'CTR3'
-                })
-            else:
-                # Fallback for subjects not found in enrollment
-                demographics_data.append({
-                    'id': subject_id,
-                    'gender': np.nan,
-                    'age_of_diagnosis': np.nan,
-                    'TDD': np.nan,
-                    'ethnicity': np.nan,
-                    'source_file': 'CTR3'
-                })
-        
-        self.df_demographics = pd.DataFrame(demographics_data)
-        self.df_demographics = self.df_demographics.sort_values('id').reset_index(drop=True)
-    
-    def save_demographics(self, output_path: str = None):
-        """Save the demographics dataframe to CSV."""
-        if output_path is None:
-            output_path = "CTR3_demographics.csv"
-        
-        if not self.df_demographics.empty:
-            self.df_demographics.to_csv(output_path, index=False)
-            print(f"Demographics data saved to {output_path}")
-        else:
-            print("No demographics data to save. Process data first.")
 
 
 def get_dataset_info(file_path):
@@ -422,7 +309,8 @@ def main():
     result = parser(file_path)
     result.to_csv('data/raw/CTR3.csv', index=False)
 
-    print(result[result['basal'] > 1])
+    print("Max insulin: ", result['insulin'].max())
+    print("Min insulin: ", result['insulin'].min())
 
     if not result.empty:
         print(f"\nProcessing completed successfully!")
