@@ -690,6 +690,10 @@ def parse_weight(weight_str, height):
         weight = 242
     elif 'kg' in weight_str:
         weight = weight * 2.20462
+    # Convert detected outliers
+    elif (weight <= 80) and (height > 5.9):
+        weight = weight * 2.20462
+
     # Otherwise assume lbs
     return weight
 
