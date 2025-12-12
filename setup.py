@@ -38,7 +38,7 @@ setup(
         "methcomp",
         "wandb",
         "python-dotenv",
-        "zipfile_deflate64",
+        "zipfile-deflate64-macos",
     ],
     extras_require={
         'heavy': [
