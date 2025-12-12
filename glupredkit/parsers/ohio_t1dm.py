@@ -33,8 +33,9 @@ class Parser(BaseParser):
         merged_df = df_testing.combine_first(df_training)
         merged_df = merged_df.sort_index()
 
-        # Add gender from gender map, gotten from the paper: https://pmc.ncbi.nlm.nih.gov/articles/PMC7881904/
+        # Add gender and insulin delivery device, gotten from the paper: https://pmc.ncbi.nlm.nih.gov/articles/PMC7881904/
         merged_df['gender'] = get_gender(subject_id)
+        merged_df['insulin_delivery_device'] = get_insulin_delivery_device(subject_id)
 
         # Ensure 5-min intervals after merging train and test
         merged_df.sort_index(inplace=True)
@@ -148,8 +149,16 @@ class Parser(BaseParser):
             df_exercise = df_exercise.resample('5min', label='right').mean()
             df = pd.merge(df, df_exercise, on="date", how='outer')
 
+        df['basal'] = df['basal'] / 12  # From U/hr to U
+        df['insulin'] = df['basal'] + df['bolus'].fillna(0)
+
         df['is_test'] = is_test
-        df['insulin_type'] = root.get('insulin_type').split(' ')[0].lower()
+        df['insulin_type_bolus'] = root.get('insulin_type').split(' ')[0].lower()
+        df['insulin_type_basal'] = root.get('insulin_type').split(' ')[0].lower()
+
+        df['cgm_device'] = 'Medtronic Enlite'
+        df['insulin_delivery_modality'] = 'SAP'
+        df['source_file'] = 'OhioT1DM'
 
         return df.sort_index()
 
@@ -183,18 +192,36 @@ def merge_data_type_into_dataframe(df, data, type_name, value_name, use_mean=Tru
 
 def get_gender(subject_id):
     gender_map = {
-        '540': 'M',
-        '544': 'M',
-        '552': 'M',
-        '567': 'F',
-        '584': 'M',
-        '596': 'M',
-        '559': 'F',
-        '563': 'M',
-        '570': 'M',
-        '575': 'F',
-        '588': 'F',
-        '591': 'F',
+        '540': 'Male',
+        '544': 'Male',
+        '552': 'Male',
+        '567': 'Female',
+        '584': 'Male',
+        '596': 'Male',
+        '559': 'Female',
+        '563': 'Male',
+        '570': 'Male',
+        '575': 'Female',
+        '588': 'Female',
+        '591': 'Female',
     }
     return gender_map[subject_id]
+
+
+def get_insulin_delivery_device(subject_id):
+    map = {
+        '540': 'MiniMed 630G',
+        '544': 'MiniMed 530G',
+        '552': 'MiniMed 630G',
+        '567': 'MiniMed 630G',
+        '584': 'MiniMed 530G',
+        '596': 'MiniMed 530G',
+        '559': 'MiniMed 530G',
+        '563': 'MiniMed 530G',
+        '570': 'MiniMed 530G',
+        '575': 'MiniMed 530G',
+        '588': 'MiniMed 530G',
+        '591': 'MiniMed 530G',
+    }
+    return map[subject_id]
 

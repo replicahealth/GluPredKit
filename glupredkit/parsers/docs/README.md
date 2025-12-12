@@ -19,19 +19,95 @@ The core dataset should consist of:
 
 
 
-
 Output is a dataframe, where each subject has data sorted by ascending dates of 5-minute intervals. 
 
 
+## IOBP2
+
+### Overview
+
+In the iLet trial, continuous data is primarily collected for participants using the Bionic Pancreas. 
+
+There are 11 subjects from the control arm in the data for the Bionic Pancreas. After suggestion from Peter from JAEB, we filter out these subjects. There is very little data from these subjects, and the data is from long before extension period. Hence, it is not known whether this data was from using the iLet Bionic Pancreas.
+
+**Study Design:**
+- 66% of pediatric participants and 80% of adult participants use the Bionic Pancreas (protocol chapter 3.3)
+- Control group continues current diabetes management with Dexcom G6 (chapters 3.4 and A.2)
+- **Treatment groups:** BP (216), BPFiasp (113), Control (107) - 
+
+### Data Fields
+
+| Field | Value | Notes |
+|-------|-------|-------|
+| `insulin_delivery_device` | Beta Bionics Gen 4 iLet | All treatment group subjects |
+| `insulin_delivery_algorithm` | iLet Bionic Pancreas | All treatment group subjects |
+| `insulin_delivery_modality` | AID | Automated Insulin Delivery for all |
+| `cgm_device` | Dexcom G6 | Protocol requirement for all participants |
+| `is_pregnant` | False | Pregnancy is exclusion criterion (Protocol Summary, Exclusion 13) |
+
+**Insulin Types:**
+- **BPFiasp group:** Both `insulin_type_bolus` and `insulin_type_basal` set to "Fiasp"
+- **BP group:** Determined from `IOBP2Insulin.txt` using pump route data
+  - Priority system when both available: enrollment status → valid dates → default selection
+  - Same insulin type assigned to both bolus and basal
+
+### Processed Data Statistics
+
+**Dataset Overview:**
+- **Total subjects:** 332 (BP + BPFiasp groups only)
+- **Time points:** 9,676,885 at 5-minute intervals
+- **Dataset shape:** (9,676,885, 22)
+- **Output:** `data/processed/IOBP2.csv`
+
+**Data Coverage:**
+- Glucose readings: 7,804,251
+- Bolus events: 1,711,927
+- Basal events: 6,233,455
+- Meal events: 87,161
+
+**Demographics:**
+| Metric | Statistics |
+|--------|------------|
+| Age | Mean: 31.8 ± 19.2 years (range: 6-82) |
+| Gender | Female: 169, Male: 163 |
+| Height | Mean: 5.39 ± 0.51 ft (range: 3.54-6.37) |
+| Weight | Mean: 161.6 ± 51.9 lbs (range: 49.4-350.0) |
+| Age at diagnosis | Mean: 13.8 ± 11.4 years (range: 0-58) |
+
+**Ethnicity Distribution:**
+- White: 254 (76.5%)
+- Black/African American: 37 (11.1%)
+- White, Hispanic/Latino: 21 (6.3%)
+- More than one race: 7 (2.1%)
+- More than one race, Hispanic/Latino: 4 (1.2%)
+
+**Insulin Distribution:**
+- Humalog (Lispro): 126 subjects
+- Fiasp: 113 subjects  
+- Novolog (Aspart): 90 subjects
 
 
-## T1Dexi
+### Assumptions and Limitations
+
+**Excluded Data:**
+- **`IOBP2ManualInsulinInj.txt`:** Insulin types unclear; excluded following babelbetes approach. Contains only 198 samples (0.002% of total dataset).
+- **`IOBP2MealDose.txt`:** Purpose unclear; minimal meal data per subject with no overlap to continuous study data.
+
+**Data Processing Notes:**
+- Control group excluded due to limited continuous monitoring data
+- Insulin type determination prioritizes enrollment status and date validity
 
 
-To do: 
-- Validate the handling of heartrate data
-- Add steps data
-- Add tests
+### Control Arm Data
+
+
+## T1DEXI
+
+### Assumptions and Limitations
+
+- Subjects on MDI kept a diary of logged insulin for MDI participants, but there are potential issues with using diary records
+
+
 
 
 ## DiaTrend
@@ -43,9 +119,41 @@ To do:
 - It is assumed that subjects using MiniMed 670G is using that with the SmartGuard function active 
 
 
+## BrisT1D
+
+Range checks and handling: 
+- We found two negative insulin doses in the dataset, within subject P12. These are set to nan, and the following eight hours are also set to nan for each of the negative doses.
 
 
-### General To Dos
+
+## HUPA UCM
+
+Range checks and handling: 
+- We found negative insulin doses within subject 17. These are set to nan, and the following eight hours are also set to nan for each of the negative doses.
+- Out of a total of 2591 non-zero carbohydrate samples, 67 of them were higher than 500g. These were set to nan. This accounts to 2.6% of the non-zero carbohydrate samples.
+- Be aware that MDI insulin data is registered manually, which might be inaccurate
+
+
+## T1D UOM 
+
+Range checks and handling: 
+- We found an insulin dose of 68U, and it seems very likely that this dose is misreported as bolus when it actually should be a basal dose because a lot of the basal doses are 68U and the basal dose from that date is missing and the time of day fits with the basal dose timing. Hence, we set that as a basal dose. 
+- Be aware that MDI insulin data is registered manually, which might be inaccurate
+
+
+## OpenAPS
+
+Processing notes: 
+- Out of a total of XX non-zero carbohydrate samples, XX of them were lower than 0g. These were set to nan. This accounts to YYY% of the non-zero carbohydrate samples.
+
+
+## Tidepool Dataset
+
+Processing notes: 
+- There are two possible sources to carbohydrate data in this dataset. One contains data from the pump bolus calculator, while the other contains data from Apple Health. We have observed some potential overlaps between them. Hence, for each individual, we use only the data source with the most values to avoid duplicates. We also drop values that have the exact same carb value and date, as this most likely is due to duplicate values (for example, overlapping samples from separate uploads, duplicates in data storage because they were stored from multiple sources like from the watch and the phone, etc.). 
+
+
+## General To Dos
 
 - Add a snapshot of a few rows for each dataset to show the dataset format
 - Improve the API for adding ice and iob values, using the loop to python api (with insulin type if available!)

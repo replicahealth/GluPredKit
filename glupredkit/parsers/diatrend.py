@@ -28,7 +28,7 @@ class Parser(BaseParser):
 
         # Resample and merge data
         df_resampled = self.resample_data(df_glucose, df_bolus_and_carbs, df_basal, df_demographics)
-        
+
         return df_resampled
 
     def load_cgm_data(self, file_path):
@@ -608,17 +608,13 @@ class Parser(BaseParser):
                     df_subject = pd.merge(df_subject, df_bolus_resampled, left_index=True, right_index=True, how='outer')
                 else:
                     # No bolus data for this subject, add empty bolus and carbs columns
-                    df_subject['bolus'] = 0.0
-                    df_subject['carbs'] = 0.0
+                    df_subject['bolus'] = np.nan
+                    df_subject['carbs'] = np.nan
             else:
                 # No bolus data at all, add empty bolus and carbs columns
-                df_subject['bolus'] = 0.0
-                df_subject['carbs'] = 0.0
-            
-            # Fill NaN bolus and carbs values with 0 (no bolus/carb events)
-            df_subject['bolus'] = df_subject['bolus'].fillna(0.0)
-            df_subject['carbs'] = df_subject['carbs'].fillna(0.0)
-            
+                df_subject['bolus'] = np.nan
+                df_subject['carbs'] = np.nan
+
             # Process basal data for this subject if available
             if not df_basal.empty:
                 df_subject_basal = df_basal[df_basal['id'] == subject_id].copy()
@@ -632,14 +628,11 @@ class Parser(BaseParser):
                     df_subject = pd.merge(df_subject, df_basal_resampled, left_index=True, right_index=True, how='outer')
                 else:
                     # No basal data for this subject, add empty basal column
-                    df_subject['basal'] = 0.0
+                    df_subject['basal'] = np.nan
             else:
                 # No basal data at all, add empty basal column
-                df_subject['basal'] = 0.0
-            
-            # Fill NaN basal values with 0 (no basal events)
-            df_subject['basal'] = df_subject['basal'].fillna(0.0)
-            
+                df_subject['basal'] = np.nan
+
             # Add demographics data as block sparse (constant per subject)
             if not df_demographics.empty:
                 subject_demo = df_demographics[df_demographics['id'] == subject_id]
@@ -672,14 +665,14 @@ class Parser(BaseParser):
                 df_subject['insulin_delivery_algorithm'] = None
                 df_subject['insulin_delivery_modality'] = None
             
-            # Keep only rows with valid glucose, bolus, basal, or carbs data
+            # Keep only subjects with rows with valid glucose, bolus, basal, or carbs data
             valid_rows = (df_subject['CGM'].notna() | 
                          (df_subject['bolus'] > 0) | 
                          (df_subject['basal'] > 0) | 
                          (df_subject['carbs'] > 0))
-            df_subject = df_subject[valid_rows]
-            
-            if not df_subject.empty:
+
+            if not df_subject[valid_rows].empty:
+                df_subject['id'] = subject_id  # Ensure all rows have id after resampling
                 processed_dfs.append(df_subject)
                 
                 # Log statistics
@@ -695,7 +688,14 @@ class Parser(BaseParser):
                       f"{bolus_events} bolus events (total: {total_bolus:.1f} units), "
                       f"{basal_intervals} basal intervals (total: {total_basal:.1f} units), "
                       f"{carb_events} carb events (total: {total_carbs:.1f}g)")
-        
+
+                # Check for 5-minute intervals
+                valid_intervals = (df_subject.index.to_series().diff().dropna() == pd.Timedelta("5min")).all()
+                if valid_intervals:
+                    print(f"Subject {subject_id} has perfect 5-minute intervals")
+                else:
+                    print(f"Warning: Subject {subject_id} does not have valid 5-minute intervals!")
+
         if not processed_dfs:
             print("No subjects processed")
             return pd.DataFrame()

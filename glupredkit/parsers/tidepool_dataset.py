@@ -36,7 +36,7 @@ class Parser(BaseParser):
         count = 0
         for subject_id in train_dfs_dict.keys():
             subject_train_df = train_dfs_dict[subject_id]
-            subject_test_df = train_dfs_dict[subject_id]
+            subject_test_df = test_dfs_dict[subject_id]
 
             # add is_test column
             subject_train_df['is_test'] = False
@@ -62,9 +62,10 @@ class Parser(BaseParser):
                 invalid_intervals = time_diffs[time_diffs != expected_interval]
                 print(f"invalid time intervals found:", invalid_intervals)
 
-            age, gender = get_age_and_gender(file_path, prefix, subject_id)
+            age, gender, age_of_diagnosis = get_age_and_diagnosis(file_path, prefix, subject_id)
             merged_df['age'] = age
             merged_df['gender'] = gender
+            merged_df['age_of_diagnosis'] = age_of_diagnosis
             merged_df['id'] = subject_id
 
             #print(merged_df)
@@ -117,7 +118,8 @@ class Parser(BaseParser):
             df = pd.merge(df, df_workout_duration, on="date", how='outer')
             df = pd.merge(df, df_calories_burned, on="date", how='outer')
 
-        df['insulin'] = df['bolus'] + df['basal'] / 12
+        df['basal'] = df['basal'] / 12
+        df['insulin'] = df['bolus'].fillna(0) + df['basal']
 
         # Ensuring homogenous time intervals
         df.sort_index(inplace=True)
@@ -206,21 +208,30 @@ class Parser(BaseParser):
         df_basal.set_index('date', inplace=True)
 
         # Dataframe carbohydrates
-        df_carbs = pd.DataFrame()
-        carb_dfs = []
-        for carb_col in ['nutrition.carbohydrate.net', 'carbInput']:
-            if carb_col in df.columns:
-                df_carbs = df[df['type'] == 'food'][['date', carb_col]]
-                df_carbs.rename(columns={"nutrition.carbohydrate.net": "carbs"}, inplace=True)
-                carb_dfs += [df_carbs]
+        possible_carb_cols = [col for col in df.columns if col in ['nutrition.carbohydrate.net', 'carbInput']]
+        main_carb_col = possible_carb_cols[0]
+        if len(possible_carb_cols) > 1:
+            # If there are available carbs in two columns, choose the column with more samples
+            # The reason we do not merge them is to avoid duplicate samples
+            n_samples_prev = 0
+            for col in possible_carb_cols:
+                df_carbs = df[['date', col]]
+                df_carbs = df_carbs.dropna(subset=[col])
+                print(f"{col}: {len(df_carbs)}")
+                if len(df_carbs) > n_samples_prev:
+                    main_carb_col = col
+                    n_samples_prev = len(df_carbs)
+        df_carbs = df[['date', main_carb_col]]
+        df_carbs = df_carbs.dropna(subset=[main_carb_col])
 
-        if len(carb_dfs) == 0:
-            assert ValueError("No carbohydrate data detected for subject! Inspect data.")
-        else:
-            df_carbs = pd.concat(carb_dfs)
+        n_carbs_with_duplicates = len(df_carbs)
+        df_carbs = df_carbs.drop_duplicates(subset=['date', main_carb_col], keep='first')
+        if n_carbs_with_duplicates > len(df_carbs):
+            print(f"Warning: Removed {n_carbs_with_duplicates - len(df_carbs)} when dropping duplicate carb samples")
+
+        df_carbs.rename(columns={main_carb_col: "carbs"}, inplace=True)
         df_carbs.sort_values(by='date', inplace=True, ascending=True)
         df_carbs.set_index('date', inplace=True)
-        #print("CARBS DF", df_carbs)
 
         # Dataframe workouts
         df_workouts = pd.DataFrame
@@ -309,22 +320,49 @@ def get_dfs_and_ids(file_path, id_prefix):
     return dfs_dict
 
 
-def get_age_and_gender(file_path, prefix, subject_id):
+def get_age_and_diagnosis(file_path, prefix, subject_id):
     folder = f'Tidepool-JDRF-{prefix}-test'
     file_name = f'{prefix}-test-metadata-summary.csv'
     full_subject_id = f'test_{subject_id.split("-")[1]}.csv'
     file_path = os.path.join(file_path, folder, file_name)
     metadata_df = pd.read_csv(file_path)
     subject_data = metadata_df[metadata_df['file_name'] == full_subject_id]
-    # Future work to add exact age at exact time
+    
+    # Extract age and gender
     age = subject_data['ageStart'].iloc[0]
     gender = subject_data['biologicalSex'].iloc[0]
     gender_map = {
-        'female': 'F',
-        'male': 'M'
+        'female': 'Female',
+        'male': 'Male'
     }
     if pd.notna(gender):
         gender = gender_map[gender.lower()]
-    return age, gender
+    
+    # Calculate age_of_diagnosis from ageStart - yearsLivingWithDiabetesStart
+    age_of_diagnosis = None
+    if 'yearsLivingWithDiabetesStart' in subject_data.columns:
+        years_living_with_diabetes = subject_data['yearsLivingWithDiabetesStart'].iloc[0]
+        if pd.notna(age) and pd.notna(years_living_with_diabetes):
+            age_of_diagnosis = age - years_living_with_diabetes
+            age_of_diagnosis = max(0, age_of_diagnosis)  # Ensure non-negative
+    
+    return age, gender, age_of_diagnosis
+
+
+def main():
+    input_path = 'data/raw/Tidepool/'
+    parser = Parser()
+
+    # Process data
+    for prefix in ['HCL150', 'PA50', 'SAP100']:
+        df = parser(prefix, input_path)
+
+        # Save processed data
+        df.to_csv(f"Tidepool-JDRF-{prefix}.csv")
+
+
+if __name__ == "__main__":
+    main()
+
 
 
