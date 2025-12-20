@@ -145,7 +145,7 @@ class Parser(BaseParser):
         else:
             ts_offset = grouped.loc[grouped['count'].idxmax(), 'est.timezoneOffset']
 
-        df['time'] = pd.to_datetime(df['time'], format='ISO8601', utc=True)
+        df['time'] = pd.to_datetime(df['time'], utc=True)
         df['time'] = df['time'].dt.tz_localize(None)
         df['date'] = df['time']
         df['date'] = df.apply(
