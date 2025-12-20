@@ -66,7 +66,7 @@ class Parser(BaseParser):
 
                 # Fill NaN where numbers were turned to 0 or strings were turned to ''
                 df_subject['meal_label'] = df_subject['meal_label'].replace('', np.nan)
-                df_subject['carbs'] = df_subject['carbs'].infer_objects(copy=False).replace(0, np.nan)
+                df_subject['carbs'] = df_subject['carbs'].infer_objects().replace(0, np.nan)
             else:
                 df_subject['meal_label'] = np.nan
                 df_subject['carbs'] = np.nan
@@ -915,7 +915,12 @@ def get_vital_sign_dicts(file_path, subject_ids):
         with zip_file.open(matched_file) as xpt_file:
             for chunk in pd.read_sas(xpt_file, format='xport', chunksize=chunksize):
                 row_count += chunksize
-                df = chunk.map(lambda x: x.decode() if isinstance(x, bytes) else x)
+                if isinstance(chunk, pd.DataFrame):
+                    df = chunk.applymap(lambda x: x.decode() if isinstance(x, bytes) else x)
+                elif isinstance(chunk, pd.Series):
+                    df = chunk.map(lambda x: x.decode() if isinstance(x, bytes) else x)
+                else:
+                    raise TypeError("chunk must be a pandas Series or DataFrame")
 
                 # For some reason, the heart rate mean gives more data in T1DEXI version, while not in T1DEXIP
                 # The heart rate from both devices in the study
@@ -989,7 +994,7 @@ def get_steps_or_cal_burn_dict(file_path, subject_ids):
         with zip_file.open(matched_file) as xpt_file:
             for chunk in pd.read_sas(xpt_file, format='xport', chunksize=chunksize):
                 row_count += chunksize
-                df_fa = chunk.map(lambda x: x.decode() if isinstance(x, bytes) else x)
+                df_fa = chunk.applymap(lambda x: x.decode() if isinstance(x, bytes) else x)
                 # Filter the DataFrame for subject_ids before looping over unique values
                 df_fa = df_fa[df_fa['USUBJID'].isin(subject_ids)]
                 df_fa['date'] = create_sas_date_for_column(df_fa['FADTC'])
@@ -1191,5 +1196,15 @@ def get_df_from_zip_deflate_64(zip_path, file_name, subject_ids=None):
         if subject_ids is not None:
             df = df[df['USUBJID'].isin(subject_ids)]
         return df
+
+
+def main():
+    parser = Parser()
+    df = parser("data/raw/t1dexi/T1DEXI.zip")
+    return df
+
+
+if __name__ == "__main__":
+    main()
 
 
