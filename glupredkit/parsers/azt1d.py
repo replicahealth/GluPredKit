@@ -8,7 +8,6 @@ from glupredkit.parsers.base_parser import BaseParser
 import pandas as pd
 import numpy as np
 import os
-import glob
 import re
 
 
@@ -71,9 +70,8 @@ class Parser(BaseParser):
         if all_processed_data:
             df_final = pd.concat(all_processed_data)
 
-            # Sort by 'id' column first, then by index (date)
-            df_final = df_final.sort_values('id')
-            df_final = df_final.sort_index()
+            # Sort by 'id' column first, then by date
+            df_final = df_final.sort_values(by=['id', 'date'])
 
             # Store in df
             self.df = df_final.copy()
@@ -201,9 +199,10 @@ class Parser(BaseParser):
 
         # Set insulin delivery algorithm
         df_subject['insulin_delivery_algorithm'] = 'Control-IQ'  # From manuscript: Control IQ system
+        df_subject.reset_index(drop=False, inplace=True)
 
         # Select and order the columns
-        final_columns = ['id', 'CGM', 'basal', 'bolus', 'carbs', 'age', 'insulin_delivery_modality', 'insulin',
+        final_columns = ['date', 'id', 'CGM', 'basal', 'bolus', 'carbs', 'age', 'insulin_delivery_modality', 'insulin',
                          'gender', 'insulin_delivery_device', 'cgm_device', 'source_file', 'context_description_cache',
                          'insulin_delivery_algorithm']
 
