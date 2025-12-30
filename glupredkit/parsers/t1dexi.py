@@ -212,7 +212,7 @@ class Parser(BaseParser):
         
         # Extract real age/diagnosis data from the dataset
         print("Extracting age and diagnosis data from raw dataset...")
-        age_diagnosis_data = extract_age_diagnosis_data(file_path, is_t1dexip)
+        age_diagnosis_data = get_age_diagnosis_data(file_path)
         
         # Extract real insulin data from the dataset
         print("Extracting insulin types from raw dataset...")
@@ -229,7 +229,7 @@ class Parser(BaseParser):
         for subject_id in unique_subjects:
             subject_demographics = demographics.get(subject_id, {})
             subject_device = device_info.get(subject_id, '')
-            subject_age_data = age_diagnosis_data.get(subject_id, {})
+            subject_age_diagnosis = age_diagnosis_data.get(subject_id, {})
             height_data = height_dict.get(subject_id)
             weight_data = weight_dict.get(subject_id)
 
@@ -258,21 +258,7 @@ class Parser(BaseParser):
             
             # Process ethnicity
             ethnicity = standardize_ethnicity(race, ethnic)
-            
-            # Get real diagnosis age if available, otherwise calculate from years since diagnosis
-            diagnosis_age = subject_age_data.get('age_of_diagnosis')
-            if diagnosis_age is None:
-                years_since = subject_age_data.get('years_since_diagnosis')
-                if years_since is not None and age is not None:
-                    try:
-                        diagnosis_age = float(age) - float(years_since)
-                        diagnosis_age = max(0, diagnosis_age)  # Ensure non-negative
-                    except:
-                        pass
-            
-            if diagnosis_age is not None:
-                diagnosis_age = round(float(diagnosis_age), 1)
-            
+
             # Get real insulin types from extracted data
             patient_insulin = insulin_mapping.get(str(subject_id), {})
             bolus_insulin = patient_insulin.get('bolus')
@@ -287,7 +273,7 @@ class Parser(BaseParser):
                 'ethnicity': ethnicity,
                 'age': age,
                 'gender': gender,
-                'age_of_diagnosis': diagnosis_age,
+                'age_of_diagnosis': subject_age_diagnosis,
                 'insulin_type_bolus': bolus_insulin,
                 'insulin_type_basal': basal_insulin,
                 'is_pregnant': np.nan,  # No pregnancy data found in original files
@@ -631,134 +617,6 @@ def extract_insulin_data_from_cm(file_path, use_deflate64=False):
     return pd.DataFrame(insulin_data)
 
 
-def extract_age_diagnosis_data(file_path, is_t1dexip=False):
-    """Extract age and diagnosis information from dataset"""
-    
-    age_diagnosis_data = {}
-    
-    try:
-        if is_t1dexip:
-            with zipfile.ZipFile(file_path, 'r') as z:
-                with tempfile.TemporaryDirectory() as temp_dir:
-                    xpt_files = [f for f in z.namelist() if f.endswith('.xpt')]
-                    
-                    # Check DM.xpt for basic demographics
-                    dm_files = [f for f in xpt_files if f.endswith('/DM.xpt')]
-                    suppdm_files = [f for f in xpt_files if f.endswith('/SUPPDM.xpt')]
-                    
-                    if dm_files:
-                        z.extract(dm_files[0], temp_dir)
-                        full_path = os.path.join(temp_dir, dm_files[0])
-                        
-                        df = pd.read_sas(full_path, format='xport')
-                        
-                        # Convert bytes to strings
-                        for col in df.columns:
-                            if df[col].dtype == 'object':
-                                try:
-                                    df[col] = df[col].apply(lambda x: x.decode('utf-8') if isinstance(x, bytes) else x)
-                                except:
-                                    pass
-                        
-                        # Store basic age data
-                        for idx, row in df.iterrows():
-                            patient_id = row['USUBJID']
-                            age = row.get('AGE')
-                            
-                            age_diagnosis_data[patient_id] = {
-                                'current_age': age,
-                                'age_of_diagnosis': None,
-                                'years_since_diagnosis': None
-                            }
-                    
-                    # Check SUPPDM.xpt for supplemental demographics
-                    if suppdm_files:
-                        z.extract(suppdm_files[0], temp_dir)
-                        full_path = os.path.join(temp_dir, suppdm_files[0])
-                        
-                        df = pd.read_sas(full_path, format='xport')
-                        
-                        # Convert bytes to strings
-                        for col in df.columns:
-                            if df[col].dtype == 'object':
-                                try:
-                                    df[col] = df[col].apply(lambda x: x.decode('utf-8') if isinstance(x, bytes) else x)
-                                except:
-                                    pass
-                        
-                        # Look for diagnosis-related questions
-                        if 'QNAM' in df.columns and 'QVAL' in df.columns:
-                            # Extract diagnosis age if available
-                            for idx, row in df.iterrows():
-                                patient_id = row['USUBJID']
-                                question = row.get('QNAM', '')
-                                value = row.get('QVAL')
-                                
-                                if patient_id in age_diagnosis_data and pd.notna(value):
-                                    if 'DIAG' in str(question).upper() and 'AGE' in str(question).upper():
-                                        try:
-                                            age_diagnosis_data[patient_id]['age_of_diagnosis'] = float(value)
-                                        except:
-                                            pass
-                                    elif 'DURATION' in str(question).upper() or 'YEARS' in str(question).upper():
-                                        try:
-                                            age_diagnosis_data[patient_id]['years_since_diagnosis'] = float(value)
-                                        except:
-                                            pass
-        else:
-            with zipfile_deflate64.ZipFile(file_path, 'r') as zip_file:
-                xpt_files = [f for f in zip_file.namelist() if f.endswith('.xpt')]
-                
-                # Check DM.xpt for basic demographics
-                dm_files = [f for f in xpt_files if f.endswith('/DM.xpt')]
-                suppdm_files = [f for f in xpt_files if f.endswith('/SUPPDM.xpt')]
-                
-                if dm_files:
-                    with zip_file.open(dm_files[0]) as xpt_file:
-                        df = xport.to_dataframe(xpt_file)
-                    
-                    # Store basic age data
-                    for idx, row in df.iterrows():
-                        patient_id = row['USUBJID']
-                        age = row.get('AGE')
-                        
-                        age_diagnosis_data[patient_id] = {
-                            'current_age': age,
-                            'age_of_diagnosis': None,
-                            'years_since_diagnosis': None
-                        }
-                
-                # Check SUPPDM.xpt for supplemental demographics
-                if suppdm_files:
-                    with zip_file.open(suppdm_files[0]) as xpt_file:
-                        df = xport.to_dataframe(xpt_file)
-                    
-                    # Look for diagnosis-related questions
-                    if 'QNAM' in df.columns and 'QVAL' in df.columns:
-                        # Extract diagnosis age if available
-                        for idx, row in df.iterrows():
-                            patient_id = row['USUBJID']
-                            question = row.get('QNAM', '')
-                            value = row.get('QVAL')
-                            
-                            if patient_id in age_diagnosis_data and pd.notna(value):
-                                if 'DIAG' in str(question).upper() and 'AGE' in str(question).upper():
-                                    try:
-                                        age_diagnosis_data[patient_id]['age_of_diagnosis'] = float(value)
-                                    except:
-                                        pass
-                                elif 'DURATION' in str(question).upper() or 'YEARS' in str(question).upper():
-                                    try:
-                                        age_diagnosis_data[patient_id]['years_since_diagnosis'] = float(value)
-                                    except:
-                                        pass
-    
-    except Exception as e:
-        print(f"Error extracting age/diagnosis data: {e}")
-    
-    return age_diagnosis_data
-
-
 def create_patient_insulin_mapping(insulin_df, patient_ids, device_info):
     """Create mapping of patients to their insulin types based on real data"""
     
@@ -984,7 +842,7 @@ def get_vital_sign_dicts(file_path, subject_ids):
 def get_steps_or_cal_burn_dict(file_path, subject_ids):
     # Steps data is processed by chunks because the steps file is so big and creates memory problems
     row_count = 0
-    chunksize = 1000000
+    chunksize = 10000
     file_name = '/FA.xpt'
     results_dict = {}
 
@@ -995,6 +853,7 @@ def get_steps_or_cal_burn_dict(file_path, subject_ids):
             for chunk in pd.read_sas(xpt_file, format='xport', chunksize=chunksize):
                 row_count += chunksize
                 df_fa = chunk.applymap(lambda x: x.decode() if isinstance(x, bytes) else x)
+
                 # Filter the DataFrame for subject_ids before looping over unique values
                 df_fa = df_fa[df_fa['USUBJID'].isin(subject_ids)]
                 df_fa['date'] = create_sas_date_for_column(df_fa['FADTC'])
@@ -1198,10 +1057,43 @@ def get_df_from_zip_deflate_64(zip_path, file_name, subject_ids=None):
         return df
 
 
+def get_age_diagnosis_data(file_path):
+    file_name = "/FA.xpt"
+    needed_columns = ["USUBJID", "FAOBJ", "FAORRES"]  # columns to keep
+    chunk_size = 10000
+
+    age_diagnosis_data = {}
+
+    with zipfile.ZipFile(file_path, "r") as zip_file:
+        # Find the target XPT file
+        matched_file = next(f for f in zip_file.namelist() if f.endswith(file_name))
+
+        with zip_file.open(matched_file) as xpt_file:
+            # Iterate in chunks
+            for chunk in pd.read_sas(xpt_file, format="xport", chunksize=chunk_size):
+                # Keep only needed columns
+                chunk = chunk[needed_columns]
+                chunk = chunk.applymap(lambda x: x.decode() if isinstance(x, bytes) else x)
+
+                # Filter for diabetes onset
+                chunk_filtered = chunk[chunk['FAOBJ'] == 'DIABETES ONSET']
+
+                # Clean and convert age values
+                chunk_filtered['FAORRES'] = chunk_filtered['FAORRES'].replace('6-<12', '0')
+                chunk_filtered['FAORRES'] = pd.to_numeric(chunk_filtered['FAORRES'], errors='coerce')
+
+                # Populate dictionary
+                for _, row in chunk_filtered.iterrows():
+                    subj_id = row['USUBJID']
+                    age_diagnosis_data[subj_id] = row['FAORRES']
+
+    return age_diagnosis_data
+
+
 def main():
     parser = Parser()
     df = parser("data/raw/t1dexi/T1DEXI.zip")
-    return df
+    df.to_csv('T1DEXI.csv')
 
 
 if __name__ == "__main__":
