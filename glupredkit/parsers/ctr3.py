@@ -158,6 +158,34 @@ class Parser(BaseParser):
                 how='outer'
             )
         
+        # Create a complete 5-minute time grid for each subject to fill gaps
+        if not df_merged.empty:
+            complete_grids = []
+            for subject_id in df_merged['id'].unique():
+                subject_data = df_merged[df_merged['id'] == subject_id]
+                if not subject_data.empty:
+                    min_time = subject_data['timestamp'].min()
+                    max_time = subject_data['timestamp'].max()
+                    
+                    # Create complete 5-minute time grid for this subject
+                    time_grid = pd.date_range(start=min_time, end=max_time, freq='5min')
+                    subject_grid = pd.DataFrame({
+                        'id': subject_id,
+                        'timestamp': time_grid
+                    })
+                    complete_grids.append(subject_grid)
+            
+            if complete_grids:
+                # Combine all subject grids
+                complete_grid = pd.concat(complete_grids, ignore_index=True)
+                
+                # Merge with existing data to fill gaps with NaN
+                df_merged = pd.merge(
+                    complete_grid, df_merged,
+                    on=['id', 'timestamp'],
+                    how='left'
+                )
+        
         return df_merged.sort_values(['id', 'timestamp']).reset_index(drop=True)
     
     def load_enrollment_data(self):

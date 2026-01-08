@@ -633,14 +633,18 @@ def add_demographics_to_df(file_path, df_merged):
                 diagnosis_year = extract_year(row.get('When were you diagnosed with diabetes?'))
 
                 # There is this weird thing were some birth years are in the future / very close to the registration
-                if diagnosis_year is None:
-                    diagnosis_year = np.nan
                 if birth_year is None:
                     birth_year = np.nan
                 else:
                     if birth_year >= extract_year(row.get('Timestamp')):
                         birth_year = np.nan
                         print(f"Subject {subject_id} has invalid birth date, set to NaN instead.")
+
+                if diagnosis_year is None:
+                    diagnosis_year = np.nan
+                elif diagnosis_year < birth_year:
+                    diagnosis_year = np.nan
+                    print(f"WARNING: Subject {subject_id} has invalid date of diagnosis")
 
                 age_of_diagnosis = diagnosis_year - birth_year
 
@@ -667,6 +671,10 @@ def add_demographics_to_df(file_path, df_merged):
                     ages = subject_dates.dt.year - birth_year
                     df_merged.loc[subject_mask, 'age'] = ages
                     df_merged.loc[subject_mask, 'age_of_diagnosis'] = age_of_diagnosis
+
+                    # Age of diagnosis cannot exceed age
+                    invalid_mask = subject_mask & (df_merged['age_of_diagnosis'] > df_merged['age'])
+                    df_merged.loc[invalid_mask, 'age_of_diagnosis'] = np.nan
 
     return df_merged
 

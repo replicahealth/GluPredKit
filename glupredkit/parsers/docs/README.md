@@ -145,6 +145,7 @@ Range checks and handling:
 
 Processing notes: 
 - Out of a total of XX non-zero carbohydrate samples, XX of them were lower than 0g. These were set to nan. This accounts to YYY% of the non-zero carbohydrate samples.
+- Some birth date and age of diagnosis dates were invalid. For example, the birth date was sometimes after the collected data, or the age of diagnosis appeared before the birth date. All of these invalid samples are set to nan.
 
 
 ## Tidepool Dataset
