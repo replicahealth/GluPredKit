@@ -136,9 +136,9 @@ class Parser(BaseParser):
             else:
                 df_subject[col] = np.nan
 
-        # Handle context_description_cache column based on device mode (sleep/exercise)
+        # Handle misc_notes column based on device mode (sleep/exercise)
         if 'DeviceMode' in df_subject.columns:
-            # Map device mode to context_description_cache with Control-IQ prefix for sleep and exercise
+            # Map device mode to misc_notes with Control-IQ prefix for sleep and exercise
             def map_device_mode(mode):
                 if mode == 'sleep':
                     return 'Control-IQ Sleep Activity'
@@ -147,11 +147,11 @@ class Parser(BaseParser):
                 else:
                     return np.nan
 
-            df_subject['context_description_cache'] = df_subject['DeviceMode'].apply(map_device_mode)
+            df_subject['misc_notes'] = df_subject['DeviceMode'].apply(map_device_mode)
         else:
-            df_subject['context_description_cache'] = np.nan
+            df_subject['misc_notes'] = np.nan
 
-        df_subject = df_subject[['date', 'CGM', 'basal', 'bolus', 'carbs', 'context_description_cache']]
+        df_subject = df_subject[['date', 'CGM', 'basal', 'bolus', 'carbs', 'misc_notes']]
         df_subject = df_subject.drop_duplicates(subset=['date', 'CGM', 'carbs', 'bolus', 'basal']).sort_values('date')
         df_subject = df_subject.set_index('date')
 
@@ -162,7 +162,7 @@ class Parser(BaseParser):
             'basal': 'mean',
             'bolus': 'mean',
             'carbs': 'mean',
-            'context_description_cache': 'last',  # take last value in interval
+            'misc_notes': 'last',  # take last value in interval
         }
 
         # Resample to 5-minute intervals (data was already resampled, but with some missing / duplicate values)
@@ -203,7 +203,7 @@ class Parser(BaseParser):
 
         # Select and order the columns
         final_columns = ['date', 'id', 'CGM', 'basal', 'bolus', 'carbs', 'age', 'insulin_delivery_modality', 'insulin',
-                         'gender', 'insulin_delivery_device', 'cgm_device', 'source_file', 'context_description_cache',
+                         'gender', 'insulin_delivery_device', 'cgm_device', 'source_file', 'misc_notes',
                          'insulin_delivery_algorithm']
 
         df_subject = df_subject[final_columns]
