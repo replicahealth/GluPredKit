@@ -94,8 +94,8 @@ class Parser(BaseParser):
             'Female': 'Female',
             'Female ': 'Female',
             'Cis Female ': 'Female',
-            'non binary': 'Non Binary',
-            'Non-binary': 'Non Binary',
+            'non binary': 'Non-binary',
+            'Non-binary': 'Non-binary',
         }
         df_demographics['gender'] = df_demographics['What would you describe your gender as?'].map(gender_map)
 
